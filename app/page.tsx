@@ -50,6 +50,19 @@ export default function Home() {
 
   const hasResult = partsWithChunks !== null;
 
+  const handleDownloadChunks = () => {
+    if (!partsWithChunks?.length) return;
+    const allChunks = partsWithChunks.flatMap((item) => item.chunks);
+    const json = allChunks.map((text) => ({ text }));
+    const blob = new Blob([JSON.stringify(json, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "chunks.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-zinc-950">
       <main className="mx-auto max-w-7xl px-4 py-8">
@@ -88,6 +101,18 @@ export default function Home() {
 
         {hasResult && partsWithChunks && (
           <div className="space-y-10">
+            <div className="flex items-center justify-between gap-4">
+              <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                Всего чанков: {partsWithChunks.reduce((n, item) => n + item.chunks.length, 0)}
+              </p>
+              <button
+                type="button"
+                onClick={handleDownloadChunks}
+                className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+              >
+                Скачать
+              </button>
+            </div>
             {partsWithChunks.map((item, blockIndex) => (
               <div key={blockIndex}>
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-2" style={{ minHeight: "40vh" }}>
