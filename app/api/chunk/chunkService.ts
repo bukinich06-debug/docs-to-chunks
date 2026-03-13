@@ -1,10 +1,19 @@
 import { splitIntoParts } from "@/lib/split";
 import mammoth from "mammoth";
 
+type LLMBackend = "ollama" | "vllm";
+
+const LLM_BACKEND: LLMBackend =
+  process.env.LLM_BACKEND?.toLowerCase() === "vllm" ? "vllm" : "ollama";
+
 const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://localhost:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "llama3.2";
 
-/** Max tokens of document text per Ollama request. Kept under 8k context so prompt + response fit. */
+const VLLM_URL = process.env.VLLM_URL ?? "";
+const VLLM_MODEL = process.env.VLLM_MODEL ?? "";
+const VLLM_MAX_TOKENS = Number(process.env.VLLM_MAX_TOKENS) || 4096;
+
+/** Max tokens of document text per LLM request. Kept under 8k context so prompt + response fit. */
 const MAX_TOKENS_PER_REQUEST = 1000;
 
 const SYSTEM_INSTRUCTION = `Ты разбиваешь текст инструкции/документации на чанки для поиска по вопросам пользователей.
@@ -55,6 +64,14 @@ export class ChunkError extends Error {
   }
 }
 
+/** Thrown when the LLM response is invalid but the request may be retried (e.g. Ollama returned non-JSON). */
+class RetryableChunkError extends ChunkError {
+  constructor(message: string) {
+    super(message, 500);
+    this.name = "RetryableChunkError";
+  }
+}
+
 export function isTextFile(file: File): boolean {
   return (
     file.type === "text/plain" ||
@@ -96,49 +113,104 @@ function postProcessChunks(chunks: string[]): string[] {
 
 const MAX_INVALID_JSON_RETRIES = 3;
 
-async function callOllamaForChunks(
+function getBackendLabel(): string {
+  return LLM_BACKEND === "vllm" ? "vLLM" : "Ollama";
+}
+
+function getBackendUrl(): string {
+  return LLM_BACKEND === "vllm" ? VLLM_URL : OLLAMA_URL;
+}
+
+/** Fetches raw text response from configured LLM (Ollama or vLLM). */
+async function getRawResponseFromLLM(
+  part: string,
+  systemInstruction: string,
+  phase: "chunk" | "merge"
+): Promise<string> {
+  if (LLM_BACKEND === "vllm") {
+    const url = VLLM_URL.trim();
+    if (!url) {
+      throw new ChunkError(
+        "LLM_BACKEND=vllm but VLLM_URL is not set. Set VLLM_URL (and optionally VLLM_MODEL) in .env",
+        500
+      );
+    }
+    const model = VLLM_MODEL.trim() || "default";
+    const res = await fetch(`${url.replace(/\/$/, "")}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: systemInstruction },
+          { role: "user", content: part },
+        ],
+        max_tokens: VLLM_MAX_TOKENS,
+        stream: false,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new ChunkError(
+        `vLLM returned ${res.status} at ${phase} stage: ${body}`,
+        500
+      );
+    }
+    const data = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const raw =
+      data.choices?.[0]?.message?.content ?? "";
+    return raw.trim();
+  }
+
+  // Ollama
+  const prompt = `${systemInstruction}\n\n---\n\n${part}`;
+  const res = await fetch(`${OLLAMA_URL}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: OLLAMA_MODEL,
+      prompt,
+      stream: false,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ChunkError(
+      `Ollama returned ${res.status} at ${phase} stage: ${body}`,
+      500
+    );
+  }
+  let data: { response?: string };
+  try {
+    data = (await res.json()) as { response?: string };
+  } catch {
+    throw new RetryableChunkError(
+      `Invalid top-level JSON from Ollama at ${phase} stage`
+    );
+  }
+  return (data.response ?? "").trim();
+}
+
+async function callLLMForChunks(
   part: string,
   systemInstruction: string,
   phase: "chunk" | "merge" = "chunk"
 ): Promise<string[]> {
-  const prompt = `${systemInstruction}\n\n---\n\n${part}`;
+  const backendLabel = getBackendLabel();
+  const backendUrl = getBackendUrl();
+
   for (let attempt = 1; attempt <= MAX_INVALID_JSON_RETRIES; attempt++) {
-    let res: Response;
+    let raw: string;
     try {
-      res = await fetch(`${OLLAMA_URL}/api/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: OLLAMA_MODEL,
-          prompt,
-          stream: false,
-        }),
-      });
+      raw = await getRawResponseFromLLM(part, systemInstruction, phase);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      throw new ChunkError(
-        `Ollama request failed at ${phase} stage: ${message}. Is Ollama running on ${OLLAMA_URL}?`,
-        500
-      );
-    }
-
-    if (!res.ok) {
-      const body = await res.text();
-      throw new ChunkError(
-        `Ollama returned ${res.status} at ${phase} stage: ${body}`,
-        500
-      );
-    }
-
-    let data: { response?: string };
-    try {
-      data = await res.json();
-    } catch {
-      if (attempt < MAX_INVALID_JSON_RETRIES) {
+      if (err instanceof RetryableChunkError && attempt < MAX_INVALID_JSON_RETRIES) {
         console.warn(
-          "[chunkService] Invalid top-level JSON from Ollama at",
-          phase,
-          "stage, attempt",
+          "[chunkService]",
+          err.message,
+          "- attempt",
           attempt,
           "of",
           MAX_INVALID_JSON_RETRIES,
@@ -146,21 +218,22 @@ async function callOllamaForChunks(
         );
         continue;
       }
+      if (err instanceof ChunkError) throw err;
+      const message = err instanceof Error ? err.message : "Unknown error";
       throw new ChunkError(
-        `Invalid JSON response from Ollama at ${phase} stage`,
+        `${backendLabel} request failed at ${phase} stage: ${message}. Is the server running on ${backendUrl}?`,
         500
       );
     }
 
-    const raw = (data.response ?? "").trim();
     let chunksFromPart: string[];
     try {
-      chunksFromPart = parseOllamaChunksResponse(raw);
+      chunksFromPart = parseChunksResponse(raw);
     } catch {
-      // Логируем сырой ответ модели, чтобы упростить отладку промпта и формата JSON.
-      // Особенно полезно на этапе merge, когда модель может вернуть неожиданный формат.
       console.error(
-        "[chunkService] Failed to parse Ollama response at",
+        "[chunkService] Failed to parse",
+        backendLabel,
+        "response at",
         phase,
         "stage. Raw response:",
         raw,
@@ -172,7 +245,7 @@ async function callOllamaForChunks(
 
       if (attempt < MAX_INVALID_JSON_RETRIES) {
         console.warn(
-          "[chunkService] Retrying Ollama call due to invalid 'chunks' JSON at",
+          "[chunkService] Retrying due to invalid 'chunks' JSON at",
           phase,
           "stage, attempt",
           attempt,
@@ -183,7 +256,7 @@ async function callOllamaForChunks(
       }
 
       throw new ChunkError(
-        `Ollama did not return valid JSON with a 'chunks' array at ${phase} stage`,
+        `${backendLabel} did not return valid JSON with a 'chunks' array at ${phase} stage`,
         500
       );
     }
@@ -191,14 +264,13 @@ async function callOllamaForChunks(
     return postProcessChunks(chunksFromPart);
   }
 
-  // Теоретически недостижимо, все ветки выше либо возвращают результат, либо кидают ошибку.
   throw new ChunkError(
-    `Unexpected error while calling Ollama at ${phase} stage`,
+    `Unexpected error while calling ${backendLabel} at ${phase} stage`,
     500
   );
 }
 
-function parseOllamaChunksResponse(raw: string): string[] {
+function parseChunksResponse(raw: string): string[] {
   let jsonStr = raw;
   const codeBlock = /^```(?:json)?\s*([\s\S]*?)```\s*$/;
   const m = raw.match(codeBlock);
@@ -210,13 +282,13 @@ function parseOllamaChunksResponse(raw: string): string[] {
     .filter(Boolean);
 }
 
-async function mergeChunksWithOllama(runs: string[][]): Promise<string[]> {
+async function mergeChunksWithLLM(runs: string[][]): Promise<string[]> {
   if (!Array.isArray(runs) || runs.length === 0) {
     return [];
   }
 
   const content = JSON.stringify({ runs });
-  return callOllamaForChunks(content, SYSTEM_INSTRUCTION_MERGE, "merge");
+  return callLLMForChunks(content, SYSTEM_INSTRUCTION_MERGE, "merge");
 }
 
 export interface ChunkDocumentResult {
@@ -224,8 +296,8 @@ export interface ChunkDocumentResult {
 }
 
 /**
- * Извлекает текст из файла, разбивает на части, для каждой части запрашивает чанки у Ollama,
- * постобрабатывает и возвращает результат. Выбрасывает ChunkError при ошибках валидации или Ollama.
+ * Извлекает текст из файла, разбивает на части, для каждой части запрашивает чанки у LLM (Ollama или vLLM по LLM_BACKEND),
+ * постобрабатывает и возвращает результат. Выбрасывает ChunkError при ошибках валидации или LLM.
  */
 export async function chunkDocument(file: File): Promise<ChunkDocumentResult> {
   if (!isTextFile(file) && !isDocxFile(file)) {
@@ -253,11 +325,11 @@ export async function chunkDocument(file: File): Promise<ChunkDocumentResult> {
     const runs: string[][] = [];
 
     for (let run = 0; run < 3; run++) {
-      const chunks = await callOllamaForChunks(part, SYSTEM_INSTRUCTION, "chunk");
+      const chunks = await callLLMForChunks(part, SYSTEM_INSTRUCTION, "chunk");
       runs.push(chunks);
     }
 
-    const mergedChunks = await mergeChunksWithOllama(runs);
+    const mergedChunks = await mergeChunksWithLLM(runs);
     partsWithChunks.push({ part, chunks: mergedChunks });
   }
 
