@@ -1,36 +1,31 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+## Визуальный тест: merge чанков из JSON
 
-## Getting Started
-
-First, run the development server:
+Используйте команду ниже, чтобы объединить чанки из нескольких JSON-файлов и сохранить результат в отдельный JSON:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run merge:chunks -- run1.json run2.json -o merged.visual.json
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Форматы входных файлов
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Каждый входной файл может быть в одном из форматов:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- `["chunk 1", "chunk 2"]`
+- `[["run1 chunk 1"], ["run2 chunk 1", "run2 chunk 2"]]`
+- `{ "chunks": ["chunk 1", "chunk 2"] }`
+- `{ "runs": [["run1 chunk 1"], ["run2 chunk 1"]] }`
 
-## Learn More
+### Что в выходном файле
 
-To learn more about Next.js, take a look at the following resources:
+В выходном файле (например, `merged.visual.json`) будут поля:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `inputFiles` — абсолютные пути обработанных файлов
+- `runsCount` — общее число прогонов, собранных из всех входов
+- `mergedChunksCount` — количество итоговых объединенных чанков
+- `mergedChunks` — финальный список объединенных чанков
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Важно
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Для объединения используется `mergeChunksSemantically` из `app/api/chunk/chunkMergeService.ts`.
+- Нужен запущенный embedding-сервис (`EMBEDDING_API_URL`), так как семантический merge зависит от эмбеддингов.
+- По умолчанию используется `http://127.0.0.1:8000/embed` и роль `passage` (можно переопределить через `EMBEDDING_API_ROLE`).
