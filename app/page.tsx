@@ -73,12 +73,12 @@ export default function Home() {
         <form onSubmit={handleSubmit} className="mb-6 space-y-4">
           <div>
             <label htmlFor="file" className="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-              Документ (.txt или .docx)
+              Документ (.txt, .doc или .docx)
             </label>
             <input
               id="file"
               type="file"
-              accept=".txt,text/plain,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              accept=".txt,text/plain,.doc,application/msword,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               onChange={handleFileChange}
               disabled={loading}
               className="block w-full max-w-md rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 shadow-sm focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"

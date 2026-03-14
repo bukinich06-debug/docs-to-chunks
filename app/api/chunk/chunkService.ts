@@ -1,5 +1,6 @@
 import { splitIntoParts } from "@/lib/split";
 import mammoth from "mammoth";
+import WordExtractor from "word-extractor";
 
 type LLMBackend = "ollama" | "vllm";
 
@@ -52,6 +53,7 @@ const SYSTEM_INSTRUCTION_MERGE = `Ты помогаешь объединить �
 
 const DOCX_MIME =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const DOC_MIME = "application/msword";
 
 /** Ошибка бизнес-логики с кодом для маппинга в HTTP-статус. */
 export class ChunkError extends Error {
@@ -87,12 +89,26 @@ export function isDocxFile(file: File): boolean {
   );
 }
 
+export function isDocFile(file: File): boolean {
+  return (
+    file.type === DOC_MIME ||
+    file.name.toLowerCase().endsWith(".doc")
+  );
+}
+
 export async function extractTextFromFile(file: File): Promise<string> {
   if (isDocxFile(file)) {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
     const result = await mammoth.extractRawText({ buffer });
     return result.value;
+  }
+  if (isDocFile(file)) {
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const extractor = new WordExtractor();
+    const doc = await extractor.extract(buffer);
+    return doc.getBody() ?? "";
   }
   return file.text();
 }
@@ -300,8 +316,8 @@ export interface ChunkDocumentResult {
  * постобрабатывает и возвращает результат. Выбрасывает ChunkError при ошибках валидации или LLM.
  */
 export async function chunkDocument(file: File): Promise<ChunkDocumentResult> {
-  if (!isTextFile(file) && !isDocxFile(file)) {
-    throw new ChunkError("File must be .txt or .docx", 400);
+  if (!isTextFile(file) && !isDocxFile(file) && !isDocFile(file)) {
+    throw new ChunkError("File must be .txt, .docx or .doc", 400);
   }
 
   let text: string;
