@@ -2,8 +2,8 @@
   "name": "create-embed",
   "version": "0.1.0",
   "private": true,
-  "scripts": {
-    "dev": "next dev",
+  "scripts": {    
+    "dev": "next dev --webpack",
     "merge:chunks": "tsx scripts/mergeChunksSemanticallyCli.ts",
     "build": "next build",
     "start": "next start",
