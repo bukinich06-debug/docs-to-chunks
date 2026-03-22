@@ -8,8 +8,18 @@ import {
   isTextFile,
 } from "./chunkFileService";
 
-/** Max tokens of document text per LLM request. */
+/** Максимум токенов текста документа на один запрос к LLM. */
 const MAX_TOKENS_PER_REQUEST = 1500;
+
+/** Один запрос к LLM с повтором при ошибке: в консоль пишем ошибку и вызываем ещё раз. */
+async function callLLMWithRetry(part: string): Promise<string[]> {
+  try {
+    return await callLLMForChunks(part);
+  } catch (err) {
+    console.error("[chunk] Ошибка запроса к LLM, повтор:", err instanceof Error ? err.message : err);
+    return await callLLMForChunks(part);
+  }
+}
 
 /** Ошибка бизнес-логики с кодом для маппинга в HTTP-статус. */
 export class ChunkError extends Error {
@@ -44,9 +54,8 @@ export async function chunkDocument(file: File): Promise<IChunkDocumentResult> {
   }
 
   const trimmed = text.trim();
-  if (!trimmed) {
-    throw new ChunkError("Файл пуст", 400);
-  }
+  if (!trimmed) throw new ChunkError("Файл пуст", 400);
+  
 
   const parts = splitIntoParts(trimmed, MAX_TOKENS_PER_REQUEST);
   const partsWithChunks: { part: string; chunks: string[] }[] = [];
@@ -54,16 +63,16 @@ export async function chunkDocument(file: File): Promise<IChunkDocumentResult> {
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
     const runs: string[][] = [];
-
-    for (let run = 0; run < 3; run++) {
-      let chunks: string[];
-      try {
-        chunks = await callLLMForChunks(part);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Не удалось сгенерировать фрагменты.";
-        throw new ChunkError(message, 500);
-      }
-      runs.push(chunks);
+    try {
+      const [chunks1, chunks2, chunks3] = await Promise.all([
+        callLLMWithRetry(part),
+        callLLMWithRetry(part),
+        callLLMWithRetry(part),
+      ]);
+      runs.push(chunks1, chunks2, chunks3);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Не удалось сгенерировать фрагменты.";
+      throw new ChunkError(message, 500);
     }
 
     let mergedChunks: string[];
