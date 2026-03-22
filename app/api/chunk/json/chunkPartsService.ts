@@ -1,6 +1,8 @@
 import { callLLMForChunks } from "../chunkLlmService";
 import { mergeChunksSemantically } from "../chunkMergeService";
 import { ChunkError, type IChunkDocumentResult } from "../chunkService";
+import { addChapterForChunks } from "./helpers";
+import { IPartInfo } from "./types";
 
 async function callLLMWithRetry(part: string): Promise<string[]> {
   try {
@@ -14,21 +16,22 @@ async function callLLMWithRetry(part: string): Promise<string[]> {
 /**
  * Для каждой части текста — три прогона LLM и семантическое объединение.
  */
-export async function chunkParts(parts: string[]): Promise<IChunkDocumentResult> {
+export async function chunkParts(parts: IPartInfo[]): Promise<IChunkDocumentResult> {
   if (parts.length === 0) throw new ChunkError("Нет частей текста для обработки.", 400);
 
   const partsWithChunks: { part: string; chunks: string[] }[] = [];
 
-  // for (let i = 0; i < parts.length; i++) {
-    const part = parts[1];
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
     const runs: string[][] = [];
 
     try {
       const [chunks1, chunks2, chunks3] = await Promise.all([
-        callLLMWithRetry(part),
-        callLLMWithRetry(part),
-        callLLMWithRetry(part),
+        callLLMWithRetry(part.text),
+        callLLMWithRetry(part.text),
+        callLLMWithRetry(part.text),
       ]);
+      
       runs.push(chunks1, chunks2, chunks3);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Не удалось сгенерировать фрагменты.";
@@ -37,13 +40,15 @@ export async function chunkParts(parts: string[]): Promise<IChunkDocumentResult>
 
     let mergedChunks: string[];
     try {
-      mergedChunks = await mergeChunksSemantically(runs);
+      mergedChunks = mergeChunksSemantically(runs);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Не удалось объединить фрагменты кода.";
       throw new ChunkError(message, 500);
     }
-    partsWithChunks.push({ part, chunks: mergedChunks });
-  // }
+
+    mergedChunks = addChapterForChunks(part, mergedChunks);
+    partsWithChunks.push({ part: part.text, chunks: mergedChunks });
+  }
 
   return { partsWithChunks };
 }
