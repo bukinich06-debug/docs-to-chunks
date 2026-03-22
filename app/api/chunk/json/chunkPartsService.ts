@@ -22,7 +22,7 @@ export async function chunkParts(parts: IPartInfo[]): Promise<IChunkDocumentResu
   const partsWithChunks: IPartWithChunks[] = [];
 
   for (let i = 0; i < parts.length; i++) {
-    const part = parts[4];
+    const part = parts[i];
     const runs: string[][] = [];
 
     try {
