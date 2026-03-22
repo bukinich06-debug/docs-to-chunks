@@ -32,8 +32,16 @@ export class ChunkError extends Error {
   }
 }
 
+export interface IPartWithChunks {
+  part: string;
+  chunks: string[];
+  chapter?: string;
+  subsection?: string;
+  page_range?: [number, number];
+}
+
 export interface IChunkDocumentResult {
-  partsWithChunks: { part: string; chunks: string[] }[];
+  partsWithChunks: IPartWithChunks[];
 }
 
 /**
@@ -58,7 +66,7 @@ export async function chunkDocument(file: File): Promise<IChunkDocumentResult> {
   
 
   const parts = splitIntoParts(trimmed, MAX_TOKENS_PER_REQUEST);
-  const partsWithChunks: { part: string; chunks: string[] }[] = [];
+  const partsWithChunks: IPartWithChunks[] = [];
 
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];

@@ -1,5 +1,6 @@
 "use client";
 
+import type { IPartWithChunks } from "@/app/api/chunk/chunkService";
 import { useState } from "react";
 
 type TabId = "document" | "json";
@@ -9,7 +10,7 @@ export default function Home() {
   const [documentFile, setDocumentFile] = useState<File | null>(null);
   const [jsonFile, setJsonFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
-  const [partsWithChunks, setPartsWithChunks] = useState<{ part: string; chunks: string[] }[] | null>(null);
+  const [partsWithChunks, setPartsWithChunks] = useState<IPartWithChunks[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const resetResult = () => {
@@ -102,8 +103,17 @@ export default function Home() {
 
   const handleDownloadChunks = () => {
     if (!partsWithChunks?.length) return;
-    const allChunks = partsWithChunks.flatMap((item) => item.chunks);
-    const json = allChunks.map((text) => ({ text }));
+    const json =
+      activeTab === "json"
+        ? partsWithChunks.flatMap((item) =>
+            item.chunks.map((text) => ({
+              text,
+              ...(item.chapter !== undefined ? { chapter: item.chapter } : {}),
+              ...(item.subsection !== undefined ? { subsection: item.subsection } : {}),
+              ...(item.page_range !== undefined ? { page_range: item.page_range } : {}),
+            }))
+          )
+        : partsWithChunks.flatMap((item) => item.chunks.map((text) => ({ text })));
     const blob = new Blob([JSON.stringify(json, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");

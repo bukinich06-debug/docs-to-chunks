@@ -1,6 +1,6 @@
 import { callLLMForChunks } from "../chunkLlmService";
 import { mergeChunksSemantically } from "../chunkMergeService";
-import { ChunkError, type IChunkDocumentResult } from "../chunkService";
+import { ChunkError, type IChunkDocumentResult, type IPartWithChunks } from "../chunkService";
 import { addChapterForChunks } from "./helpers";
 import { IPartInfo } from "./types";
 
@@ -19,10 +19,10 @@ async function callLLMWithRetry(part: string): Promise<string[]> {
 export async function chunkParts(parts: IPartInfo[]): Promise<IChunkDocumentResult> {
   if (parts.length === 0) throw new ChunkError("Нет частей текста для обработки.", 400);
 
-  const partsWithChunks: { part: string; chunks: string[] }[] = [];
+  const partsWithChunks: IPartWithChunks[] = [];
 
   for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
+    const part = parts[4];
     const runs: string[][] = [];
 
     try {
@@ -47,7 +47,8 @@ export async function chunkParts(parts: IPartInfo[]): Promise<IChunkDocumentResu
     }
 
     mergedChunks = addChapterForChunks(part, mergedChunks);
-    partsWithChunks.push({ part: part.text, chunks: mergedChunks });
+    const { text, ...meta } = part;
+    partsWithChunks.push({ part: text, chunks: mergedChunks, ...meta });
   }
 
   return { partsWithChunks };
