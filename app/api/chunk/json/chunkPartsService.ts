@@ -1,7 +1,6 @@
 import { callLLMForChunks } from "../chunkLlmService";
 import { mergeChunksSemantically } from "../chunkMergeService";
 import { ChunkError, type IChunkDocumentResult, type IPartWithChunks } from "../chunkService";
-import { addChapterForChunks } from "./helpers";
 import { IPartInfo } from "./types";
 
 async function callLLMWithRetry(part: string): Promise<string[]> {
@@ -46,7 +45,6 @@ export async function chunkParts(parts: IPartInfo[]): Promise<IChunkDocumentResu
       throw new ChunkError(message, 500);
     }
 
-    mergedChunks = addChapterForChunks(part, mergedChunks);
     const { text, ...meta } = part;
     partsWithChunks.push({ part: text, chunks: mergedChunks, ...meta });
   }

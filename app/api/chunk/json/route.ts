@@ -21,8 +21,16 @@ export async function POST(request: Request) {
     );
   }
 
+  const documentationName = formData.get("documentation_name");
+  if (typeof documentationName !== "string" || !documentationName.trim()) {
+    return NextResponse.json(
+      { error: "Documentation name is required" },
+      { status: 400 }
+    );
+  }
+
   try {
-    const result = await chunkFromChunksJsonFile(file);
+    const result = await chunkFromChunksJsonFile(file, documentationName.trim());
     return NextResponse.json(result);
   } catch (e) {
     if (e instanceof ChunkError) {

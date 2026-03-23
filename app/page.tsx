@@ -9,6 +9,7 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<TabId>("document");
   const [documentFile, setDocumentFile] = useState<File | null>(null);
   const [jsonFile, setJsonFile] = useState<File | null>(null);
+  const [jsonDocumentationName, setJsonDocumentationName] = useState("");
   const [loading, setLoading] = useState(false);
   const [partsWithChunks, setPartsWithChunks] = useState<IPartWithChunks[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +33,11 @@ export default function Home() {
   const handleJsonFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     setJsonFile(f ?? null);
+    resetResult();
+  };
+
+  const handleJsonDocumentationNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setJsonDocumentationName(e.target.value);
     resetResult();
   };
 
@@ -69,7 +75,8 @@ export default function Home() {
 
   const handleJsonSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!jsonFile) return;
+    const documentationName = jsonDocumentationName.trim();
+    if (!jsonFile || !documentationName) return;
 
     setLoading(true);
     setError(null);
@@ -78,6 +85,7 @@ export default function Home() {
     try {
       const formData = new FormData();
       formData.set("file", jsonFile);
+      formData.set("documentation_name", documentationName);
 
       const res = await fetch("/api/chunk/json", {
         method: "POST",
@@ -103,11 +111,13 @@ export default function Home() {
 
   const handleDownloadChunks = () => {
     if (!partsWithChunks?.length) return;
+    const documentationName = jsonDocumentationName.trim();
     const json =
       activeTab === "json"
         ? partsWithChunks.flatMap((item) =>
             item.chunks.map((text) => ({
               text,
+              documentation_name: documentationName,
               ...(item.chapter !== undefined ? { chapter: item.chapter } : {}),
               ...(item.subsection !== undefined ? { subsection: item.subsection } : {}),
               ...(item.page_range !== undefined ? { page_range: item.page_range } : {}),
@@ -202,9 +212,27 @@ export default function Home() {
                 className="block w-full max-w-md rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 shadow-sm focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
               />
             </div>
+            <div>
+              <label
+                htmlFor="documentation-name"
+                className="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300"
+              >
+                Название документации
+              </label>
+              <input
+                id="documentation-name"
+                type="text"
+                required
+                value={jsonDocumentationName}
+                onChange={handleJsonDocumentationNameChange}
+                disabled={loading}
+                placeholder="Например: Product API v2"
+                className="block w-full max-w-md rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 shadow-sm focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+              />
+            </div>
             <button
               type="submit"
-              disabled={!jsonFile || loading}
+              disabled={!jsonFile || !jsonDocumentationName.trim() || loading}
               className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
             >
               {loading ? "Обработка…" : "Обработать"}

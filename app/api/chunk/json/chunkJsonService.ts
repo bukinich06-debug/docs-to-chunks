@@ -10,7 +10,7 @@ function isJsonChunksFile(file: File): boolean {
 }
 
 
-const getPartInfo = (parsed: any): IPartInfo[] => {
+const getPartInfo = (parsed: any, documentationName: string): IPartInfo[] => {
   if (parsed === null || typeof parsed !== "object") throw new ChunkError("JSON должен быть объектом с полем chunks (массив).", 400);
 
   const chunks = parsed.chunks;
@@ -29,7 +29,8 @@ const getPartInfo = (parsed: any): IPartInfo[] => {
 
     const part: IPartInfo = {
       text,
-      chapter: item.chapter,
+      documentation_name: documentationName,
+      section: item.chapter,
       subsection: item.subsection,
       page_range: item.page_range,
     };
@@ -43,7 +44,7 @@ const getPartInfo = (parsed: any): IPartInfo[] => {
 /**
  * Читает файл *.chunks.json (объект с metadata и chunks[].text), для каждого непустого text — тот же пайплайн, что и для частей документа.
  */
-export async function chunkFromChunksJsonFile(file: File): Promise<IChunkDocumentResult> {
+export async function chunkFromChunksJsonFile(file: File, documentationName: string): Promise<IChunkDocumentResult> {
   if (!isJsonChunksFile(file)) {
     throw new ChunkError("Файл должен быть JSON (.json или application/json).", 400);
   }
@@ -62,7 +63,7 @@ export async function chunkFromChunksJsonFile(file: File): Promise<IChunkDocumen
     throw new ChunkError("Невалидный JSON.", 400);
   }
 
-  const parts = getPartInfo(parsed);
+  const parts = getPartInfo(parsed, documentationName);
   
   return chunkParts(parts);
 }
