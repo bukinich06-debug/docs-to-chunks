@@ -2,7 +2,7 @@
   "name": "create-embed",
   "version": "0.1.0",
   "private": true,
-  "scripts": {    
+  "scripts": {
     "dev": "next dev --webpack",
     "merge:chunks": "tsx scripts/mergeChunksSemanticallyCli.ts",
     "build": "next build",
@@ -12,6 +12,7 @@
   "dependencies": {
     "mammoth": "^1.11.0",
     "next": "16.1.6",
+    "pdfjs-dist": "^5.5.207",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "word-extractor": "^1.0.4"
