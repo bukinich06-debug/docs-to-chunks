@@ -1,7 +1,7 @@
 import { callLLMForChunks } from "../chunkLlmService";
 import { mergeChunksSemantically } from "../chunkMergeService";
-import { ChunkError, type IChunkDocumentResult, type IPartWithChunks } from "../chunkService";
-import { IPartInfo } from "./types";
+import { ChunkError } from "../chunkService";
+import { IJsonChunkInputItem, IJsonChunkOutputItem } from "./types";
 
 async function callLLMWithRetry(part: string): Promise<string[]> {
   try {
@@ -15,10 +15,10 @@ async function callLLMWithRetry(part: string): Promise<string[]> {
 /**
  * Для каждой части текста — три прогона LLM и семантическое объединение.
  */
-export async function chunkParts(parts: IPartInfo[]): Promise<IChunkDocumentResult> {
+export async function chunkParts(parts: IJsonChunkInputItem[]): Promise<IJsonChunkOutputItem[]> {
   if (parts.length === 0) throw new ChunkError("Нет частей текста для обработки.", 400);
 
-  const partsWithChunks: IPartWithChunks[] = [];
+  const partsWithChunks: IJsonChunkOutputItem[] = [];
 
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
@@ -45,9 +45,14 @@ export async function chunkParts(parts: IPartInfo[]): Promise<IChunkDocumentResu
       throw new ChunkError(message, 500);
     }
 
-    const { text, ...meta } = part;
-    partsWithChunks.push({ part: text, chunks: mergedChunks, ...meta });
+    partsWithChunks.push({
+      id: part.id,
+      label: part.label,
+      title: part.title,
+      parents: part.parents,
+      chunks: mergedChunks,
+    });
   }
 
-  return { partsWithChunks };
+  return partsWithChunks;
 }

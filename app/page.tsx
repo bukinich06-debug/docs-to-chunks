@@ -1,21 +1,75 @@
 "use client";
 
 import type { IPartWithChunks } from "@/app/api/chunk/chunkService";
+import type { IJsonChunkInputItem, IJsonChunkOutputItem } from "@/app/api/chunk/json/types";
 import { useState } from "react";
 
 type TabId = "document" | "json";
+type ResultState =
+  | { kind: "document"; items: IPartWithChunks[] }
+  | { kind: "json"; items: IJsonChunkOutputItem[]; sourceItems: IJsonChunkInputItem[] }
+  | null;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isJsonChunkParent(value: unknown): value is IJsonChunkInputItem["parents"][number] {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.label) &&
+    isNonEmptyString(value.title)
+  );
+}
+
+function isJsonChunkInputItem(value: unknown): value is IJsonChunkInputItem {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.label) &&
+    isNonEmptyString(value.title) &&
+    isNonEmptyString(value.text) &&
+    Array.isArray(value.parents) &&
+    value.parents.every(isJsonChunkParent)
+  );
+}
+
+async function readJsonInputFile(file: File): Promise<IJsonChunkInputItem[]> {
+  const raw = await file.text();
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error("Невалидный JSON.");
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw new Error("JSON должен быть массивом объектов.");
+  }
+
+  if (!parsed.every(isJsonChunkInputItem)) {
+    throw new Error("Каждый элемент JSON должен содержать id, label, title, text и parents.");
+  }
+
+  return parsed;
+}
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<TabId>("document");
   const [documentFile, setDocumentFile] = useState<File | null>(null);
   const [jsonFile, setJsonFile] = useState<File | null>(null);
-  const [jsonDocumentationName, setJsonDocumentationName] = useState("");
   const [loading, setLoading] = useState(false);
-  const [partsWithChunks, setPartsWithChunks] = useState<IPartWithChunks[] | null>(null);
+  const [result, setResult] = useState<ResultState>(null);
   const [error, setError] = useState<string | null>(null);
 
   const resetResult = () => {
-    setPartsWithChunks(null);
+    setResult(null);
     setError(null);
   };
 
@@ -36,18 +90,13 @@ export default function Home() {
     resetResult();
   };
 
-  const handleJsonDocumentationNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setJsonDocumentationName(e.target.value);
-    resetResult();
-  };
-
   const handleDocumentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!documentFile) return;
 
     setLoading(true);
     setError(null);
-    setPartsWithChunks(null);
+    setResult(null);
 
     try {
       const formData = new FormData();
@@ -65,7 +114,7 @@ export default function Home() {
         return;
       }
 
-      setPartsWithChunks(data.partsWithChunks ?? []);
+      setResult({ kind: "document", items: data.partsWithChunks ?? [] });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
     } finally {
@@ -75,17 +124,16 @@ export default function Home() {
 
   const handleJsonSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const documentationName = jsonDocumentationName.trim();
-    if (!jsonFile || !documentationName) return;
+    if (!jsonFile) return;
 
     setLoading(true);
     setError(null);
-    setPartsWithChunks(null);
+    setResult(null);
 
     try {
+      const sourceItems = await readJsonInputFile(jsonFile);
       const formData = new FormData();
       formData.set("file", jsonFile);
-      formData.set("documentation_name", documentationName);
 
       const res = await fetch("/api/chunk/json", {
         method: "POST",
@@ -99,7 +147,7 @@ export default function Home() {
         return;
       }
 
-      setPartsWithChunks(data.partsWithChunks ?? []);
+      setResult({ kind: "json", items: Array.isArray(data) ? data : [], sourceItems });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
     } finally {
@@ -107,23 +155,14 @@ export default function Home() {
     }
   };
 
-  const hasResult = partsWithChunks !== null;
+  const hasResult = result !== null;
 
   const handleDownloadChunks = () => {
-    if (!partsWithChunks?.length) return;
-    const documentationName = jsonDocumentationName.trim();
+    if (!result?.items.length) return;
     const json =
-      activeTab === "json"
-        ? partsWithChunks.flatMap((item) =>
-            item.chunks.map((text) => ({
-              text,
-              documentation_name: documentationName,
-              ...(item.chapter !== undefined ? { chapter: item.chapter } : {}),
-              ...(item.subsection !== undefined ? { subsection: item.subsection } : {}),
-              ...(item.page_range !== undefined ? { page_range: item.page_range } : {}),
-            }))
-          )
-        : partsWithChunks.flatMap((item) => item.chunks.map((text) => ({ text })));
+      result.kind === "json"
+        ? result.items
+        : result.items.flatMap((item) => item.chunks.map((text) => ({ text })));
     const blob = new Blob([JSON.stringify(json, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -201,8 +240,11 @@ export default function Home() {
           <form onSubmit={handleJsonSubmit} className="mb-6 space-y-4">
             <div>
               <label htmlFor="file-json" className="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                Файл с предразбивкой (JSON: metadata + массив chunks с полем text)
+                JSON-файл с массивом объектов
               </label>
+              <p className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
+                <code>[{"{ id, label, title, text, parents }"}]</code>
+              </p>
               <input
                 id="file-json"
                 type="file"
@@ -212,27 +254,14 @@ export default function Home() {
                 className="block w-full max-w-md rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 shadow-sm focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
               />
             </div>
-            <div>
-              <label
-                htmlFor="documentation-name"
-                className="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300"
-              >
-                Название документации
-              </label>
-              <input
-                id="documentation-name"
-                type="text"
-                required
-                value={jsonDocumentationName}
-                onChange={handleJsonDocumentationNameChange}
-                disabled={loading}
-                placeholder="Например: Product API v2"
-                className="block w-full max-w-md rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 shadow-sm focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
-              />
-            </div>
+            <p className="max-w-3xl text-sm text-zinc-600 dark:text-zinc-400">
+              Каждый объект должен содержать поля <code>id</code>, <code>label</code>, <code>title</code>,
+              <code>text</code> и массив <code>parents</code>. В ответе поле <code>text</code> будет заменено на
+              массив <code>chunks</code>.
+            </p>
             <button
               type="submit"
-              disabled={!jsonFile || !jsonDocumentationName.trim() || loading}
+              disabled={!jsonFile || loading}
               className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
             >
               {loading ? "Обработка…" : "Обработать"}
@@ -246,11 +275,11 @@ export default function Home() {
           </p>
         )}
 
-        {hasResult && partsWithChunks && (
+        {hasResult && result && (
           <div className="space-y-10">
             <div className="flex items-center justify-between gap-4">
               <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                Всего чанков: {partsWithChunks.reduce((n, item) => n + item.chunks.length, 0)}
+                Всего чанков: {result.items.reduce((n, item) => n + item.chunks.length, 0)}
               </p>
               <button
                 type="button"
@@ -260,43 +289,97 @@ export default function Home() {
                 Скачать
               </button>
             </div>
-            {partsWithChunks.map((item, blockIndex) => (
-              <div key={blockIndex}>
-                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2" style={{ minHeight: "40vh" }}>
-                  <section className="flex min-h-0 flex-col">
-                    <h2 className="mb-3 text-lg font-medium text-zinc-800 dark:text-zinc-200">
-                      Часть {blockIndex + 1} (текст для LLM)
-                    </h2>
-                    <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
-                      <p className="whitespace-pre-wrap p-4 text-sm text-zinc-800 dark:text-zinc-200">{item.part}</p>
-                    </div>
-                  </section>
-                  <section className="flex min-h-0 flex-col">
-                    <h2 className="mb-3 text-lg font-medium text-zinc-800 dark:text-zinc-200">
-                      Чанки из этой части ({item.chunks.length})
-                    </h2>
-                    <div className="min-h-0 flex-1 overflow-y-auto">
-                      <ul className="space-y-4">
-                        {item.chunks.map((text, i) => (
-                          <li
-                            key={i}
-                            className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-700 dark:bg-zinc-900"
-                          >
-                            <span className="mb-2 block text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                              Блок {i + 1}
-                            </span>
-                            <p className="whitespace-pre-wrap text-sm text-zinc-800 dark:text-zinc-200">{text}</p>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  </section>
+            {result.kind === "document" &&
+              result.items.map((item, blockIndex) => (
+                <div key={blockIndex}>
+                  <div className="grid grid-cols-1 gap-6 lg:grid-cols-2" style={{ minHeight: "40vh" }}>
+                    <section className="flex min-h-0 flex-col">
+                      <h2 className="mb-3 text-lg font-medium text-zinc-800 dark:text-zinc-200">
+                        Часть {blockIndex + 1} (текст для LLM)
+                      </h2>
+                      <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
+                        <p className="whitespace-pre-wrap p-4 text-sm text-zinc-800 dark:text-zinc-200">{item.part}</p>
+                      </div>
+                    </section>
+                    <section className="flex min-h-0 flex-col">
+                      <h2 className="mb-3 text-lg font-medium text-zinc-800 dark:text-zinc-200">
+                        Чанки из этой части ({item.chunks.length})
+                      </h2>
+                      <div className="min-h-0 flex-1 overflow-y-auto">
+                        <ul className="space-y-4">
+                          {item.chunks.map((text, i) => (
+                            <li
+                              key={i}
+                              className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-700 dark:bg-zinc-900"
+                            >
+                              <span className="mb-2 block text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                                Блок {i + 1}
+                              </span>
+                              <p className="whitespace-pre-wrap text-sm text-zinc-800 dark:text-zinc-200">{text}</p>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </section>
+                  </div>
+                  {blockIndex < result.items.length - 1 && (
+                    <div className="mt-10 border-t-2 border-dashed border-zinc-300 dark:border-zinc-600" aria-hidden />
+                  )}
                 </div>
-                {blockIndex < partsWithChunks.length - 1 && (
-                  <div className="mt-10 border-t-2 border-dashed border-zinc-300 dark:border-zinc-600" aria-hidden />
-                )}
-              </div>
-            ))}
+              ))}
+            {result.kind === "json" &&
+              result.items.map((item, blockIndex) => {
+                const sourceItem = result.sourceItems[blockIndex];
+
+                return (
+                  <div key={`${item.id}-${blockIndex}`}>
+                    <div className="mb-3 space-y-1">
+                      <h2 className="text-lg font-medium text-zinc-800 dark:text-zinc-200">{item.title}</h2>
+                      <p className="text-sm text-zinc-600 dark:text-zinc-400">ID: {item.id}</p>
+                      {item.parents.length > 0 && (
+                        <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                          Родители: {item.parents.map((parent) => parent.title).join(" / ")}
+                        </p>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2" style={{ minHeight: "40vh" }}>
+                      <section className="flex min-h-0 flex-col">
+                        <h3 className="mb-3 text-lg font-medium text-zinc-800 dark:text-zinc-200">
+                          Исходный text
+                        </h3>
+                        <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
+                          <p className="whitespace-pre-wrap p-4 text-sm text-zinc-800 dark:text-zinc-200">
+                            {sourceItem?.text ?? "Исходный текст недоступен."}
+                          </p>
+                        </div>
+                      </section>
+                      <section className="flex min-h-0 flex-col">
+                        <h3 className="mb-3 text-lg font-medium text-zinc-800 dark:text-zinc-200">
+                          Чанки ({item.chunks.length})
+                        </h3>
+                        <div className="min-h-0 flex-1 overflow-y-auto">
+                          <ul className="space-y-4">
+                            {item.chunks.map((text, i) => (
+                              <li
+                                key={i}
+                                className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-700 dark:bg-zinc-900"
+                              >
+                                <span className="mb-2 block text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                                  Блок {i + 1}
+                                </span>
+                                <p className="whitespace-pre-wrap text-sm text-zinc-800 dark:text-zinc-200">{text}</p>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      </section>
+                    </div>
+                    {blockIndex < result.items.length - 1 && (
+                      <div className="mt-10 border-t-2 border-dashed border-zinc-300 dark:border-zinc-600" aria-hidden />
+                    )}
+                  </div>
+                );
+              })}
           </div>
         )}
       </main>
