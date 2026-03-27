@@ -46,7 +46,7 @@ export async function chunkParts(parts: IJsonChunkInputItem[]): Promise<IJsonChu
     }
 
     partsWithChunks.push({
-      id: part.id,
+      number: part.number,
       label: part.label,
       title: part.title,
       parents: part.parents,

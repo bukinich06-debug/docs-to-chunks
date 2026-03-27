@@ -20,7 +20,7 @@ type PdfOutlineItem = {
 };
 
 type ParentItem = {
-  id: string;
+  number: string;
   label: string;
   title: string;
 };
@@ -33,7 +33,7 @@ type FlatOutlineNode = {
 };
 
 type OutputItem = {
-  id: string;
+  number: string;
   label: string;
   title: string;
   text: string;
@@ -55,14 +55,14 @@ function toParentItem(title: string): ParentItem {
 
   if (!match) {
     return {
-      id: title,
+      number: title,
       label: title,
       title,
     };
   }
 
   return {
-    id: match[1],
+    number: match[1],
     label: match[2].trim(),
     title,
   };
@@ -312,7 +312,7 @@ async function materializeOutputItems(
     }
 
     output.push({
-      id: currentItem.id,
+      number: currentItem.number,
       label: currentItem.label,
       title: node.title,
       text: pageTexts.join("\n\n").trim(),

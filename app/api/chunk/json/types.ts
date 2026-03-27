@@ -1,11 +1,11 @@
 export interface IJsonChunkParent {
-  id: string;
+  number: string;
   label: string;
   title: string;
 }
 
 export interface IJsonChunkInputItem {
-  id: string;
+  number: string;
   label: string;
   title: string;
   text: string;
@@ -13,7 +13,7 @@ export interface IJsonChunkInputItem {
 }
 
 export interface IJsonChunkOutputItem {
-  id: string;
+  number: string;
   label: string;
   title: string;
   parents: IJsonChunkParent[];

@@ -21,7 +21,7 @@ function isNonEmptyString(value: unknown): value is string {
 function isJsonChunkParent(value: unknown): value is IJsonChunkInputItem["parents"][number] {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.number) &&
     isNonEmptyString(value.label) &&
     isNonEmptyString(value.title)
   );
@@ -30,7 +30,7 @@ function isJsonChunkParent(value: unknown): value is IJsonChunkInputItem["parent
 function isJsonChunkInputItem(value: unknown): value is IJsonChunkInputItem {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.id) &&
+    isNonEmptyString(value.number) &&
     isNonEmptyString(value.label) &&
     isNonEmptyString(value.title) &&
     isNonEmptyString(value.text) &&
@@ -54,7 +54,7 @@ async function readJsonInputFile(file: File): Promise<IJsonChunkInputItem[]> {
   }
 
   if (!parsed.every(isJsonChunkInputItem)) {
-    throw new Error("Каждый элемент JSON должен содержать id, label, title, text и parents.");
+    throw new Error("Каждый элемент JSON должен содержать number, label, title, text и parents.");
   }
 
   return parsed;
@@ -332,10 +332,10 @@ export default function Home() {
                 const sourceItem = result.sourceItems[blockIndex];
 
                 return (
-                  <div key={`${item.id}-${blockIndex}`}>
+                  <div key={`${item.number}-${blockIndex}`}>
                     <div className="mb-3 space-y-1">
                       <h2 className="text-lg font-medium text-zinc-800 dark:text-zinc-200">{item.title}</h2>
-                      <p className="text-sm text-zinc-600 dark:text-zinc-400">ID: {item.id}</p>
+                      <p className="text-sm text-zinc-600 dark:text-zinc-400">Number: {item.number}</p>
                       {item.parents.length > 0 && (
                         <p className="text-sm text-zinc-600 dark:text-zinc-400">
                           Родители: {item.parents.map((parent) => parent.title).join(" / ")}

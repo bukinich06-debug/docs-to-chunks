@@ -22,7 +22,10 @@ function parseParent(parent: unknown, index: number, itemIndex: number): IJsonCh
   }
 
   return {
-    id: getRequiredString((parent as Record<string, unknown>).id, `Поле id в parents[${index}] у записи [${itemIndex}]`),
+    number: getRequiredString(
+      (parent as Record<string, unknown>).number,
+      `Поле number в parents[${index}] у записи [${itemIndex}]`
+    ),
     label: getRequiredString(
       (parent as Record<string, unknown>).label,
       `Поле label в parents[${index}] у записи [${itemIndex}]`
@@ -36,7 +39,7 @@ function parseParent(parent: unknown, index: number, itemIndex: number): IJsonCh
 
 const getPartInfo = (parsed: unknown): IJsonChunkInputItem[] => {
   if (!Array.isArray(parsed)) {
-    throw new ChunkError("JSON должен быть массивом объектов с полями id, label, title, text, parents.", 400);
+    throw new ChunkError("JSON должен быть массивом объектов с полями number, label, title, text, parents.", 400);
   }
 
   const parts: IJsonChunkInputItem[] = [];
@@ -54,7 +57,7 @@ const getPartInfo = (parsed: unknown): IJsonChunkInputItem[] => {
     }
 
     parts.push({
-      id: getRequiredString(record.id, `Поле id у элемента [${i}]`),
+      number: getRequiredString(record.number, `Поле number у элемента [${i}]`),
       label: getRequiredString(record.label, `Поле label у элемента [${i}]`),
       title: getRequiredString(record.title, `Поле title у элемента [${i}]`),
       text: getRequiredString(record.text, `Поле text у элемента [${i}]`),
