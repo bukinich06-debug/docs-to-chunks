@@ -17,5 +17,6 @@ export interface IJsonChunkOutputItem {
   label: string;
   title: string;
   parents: IJsonChunkParent[];
+  sourceText: string;
   chunks: string[];
 }

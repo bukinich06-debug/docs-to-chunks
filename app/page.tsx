@@ -1,64 +1,14 @@
 "use client";
 
 import type { IPartWithChunks } from "@/app/api/chunk/chunkService";
-import type { IJsonChunkInputItem, IJsonChunkOutputItem } from "@/app/api/chunk/json/types";
+import type { IJsonChunkOutputItem } from "@/app/api/chunk/json/types";
 import { useState } from "react";
 
 type TabId = "document" | "json";
 type ResultState =
   | { kind: "document"; items: IPartWithChunks[] }
-  | { kind: "json"; items: IJsonChunkOutputItem[]; sourceItems: IJsonChunkInputItem[] }
+  | { kind: "json"; items: IJsonChunkOutputItem[] }
   | null;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function isJsonChunkParent(value: unknown): value is IJsonChunkInputItem["parents"][number] {
-  return (
-    isRecord(value) &&
-    isNonEmptyString(value.number) &&
-    isNonEmptyString(value.label) &&
-    isNonEmptyString(value.title)
-  );
-}
-
-function isJsonChunkInputItem(value: unknown): value is IJsonChunkInputItem {
-  return (
-    isRecord(value) &&
-    isNonEmptyString(value.number) &&
-    isNonEmptyString(value.label) &&
-    isNonEmptyString(value.title) &&
-    isNonEmptyString(value.text) &&
-    Array.isArray(value.parents) &&
-    value.parents.every(isJsonChunkParent)
-  );
-}
-
-async function readJsonInputFile(file: File): Promise<IJsonChunkInputItem[]> {
-  const raw = await file.text();
-  let parsed: unknown;
-
-  try {
-    parsed = JSON.parse(raw) as unknown;
-  } catch {
-    throw new Error("Невалидный JSON.");
-  }
-
-  if (!Array.isArray(parsed)) {
-    throw new Error("JSON должен быть массивом объектов.");
-  }
-
-  if (!parsed.every(isJsonChunkInputItem)) {
-    throw new Error("Каждый элемент JSON должен содержать number, label, title, text и parents.");
-  }
-
-  return parsed;
-}
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<TabId>("document");
@@ -131,7 +81,6 @@ export default function Home() {
     setResult(null);
 
     try {
-      const sourceItems = await readJsonInputFile(jsonFile);
       const formData = new FormData();
       formData.set("file", jsonFile);
 
@@ -147,7 +96,7 @@ export default function Home() {
         return;
       }
 
-      setResult({ kind: "json", items: Array.isArray(data) ? data : [], sourceItems });
+      setResult({ kind: "json", items: Array.isArray(data) ? data : [] });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
     } finally {
@@ -329,8 +278,6 @@ export default function Home() {
               ))}
             {result.kind === "json" &&
               result.items.map((item, blockIndex) => {
-                const sourceItem = result.sourceItems[blockIndex];
-
                 return (
                   <div key={`${item.number}-${blockIndex}`}>
                     <div className="mb-3 space-y-1">
@@ -349,7 +296,7 @@ export default function Home() {
                         </h3>
                         <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
                           <p className="whitespace-pre-wrap p-4 text-sm text-zinc-800 dark:text-zinc-200">
-                            {sourceItem?.text ?? "Исходный текст недоступен."}
+                            {item.sourceText || "Исходный текст недоступен."}
                           </p>
                         </div>
                       </section>

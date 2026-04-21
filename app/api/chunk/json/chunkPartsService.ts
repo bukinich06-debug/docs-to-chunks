@@ -50,6 +50,7 @@ export async function chunkParts(parts: IJsonChunkInputItem[]): Promise<IJsonChu
       label: part.label,
       title: part.title,
       parents: part.parents,
+      sourceText: part.text,
       chunks: mergedChunks,
     });
   }
