@@ -40,6 +40,12 @@ export default function RootLayout({
             >
               PDF
             </Link>
+            <Link
+              href="/docx"
+              className="text-sm font-medium text-zinc-700 transition-colors hover:text-zinc-950 dark:text-zinc-300 dark:hover:text-zinc-50"
+            >
+              DOCX
+            </Link>
           </nav>
         </div>
         {children}

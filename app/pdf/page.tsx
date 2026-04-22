@@ -1,5 +1,13 @@
 "use client";
 
+import {
+  downloadOutlineJson,
+  outlineJsonBaseName,
+  sanitizeTitle,
+  toParentItem,
+  type OutputItem,
+  type ParentItem,
+} from "@/lib/outlineOutput";
 import { useState, type ChangeEvent, type FormEvent } from "react";
 
 type PdfjsModule = typeof import("pdfjs-dist");
@@ -19,12 +27,6 @@ type PdfOutlineItem = {
   items?: PdfOutlineItem[] | null;
 };
 
-type ParentItem = {
-  number: string;
-  label: string;
-  title: string;
-};
-
 type FlatOutlineNode = {
   title: string;
   pageStart: number;
@@ -32,41 +34,10 @@ type FlatOutlineNode = {
   parents: ParentItem[];
 };
 
-type OutputItem = {
-  number: string;
-  label: string;
-  title: string;
-  text: string;
-  parents: ParentItem[];
-};
-
 const PDFJS_SRC = "/pdf.mjs";
 const WORKER_SRC = "/pdf.worker.mjs";
 
 let isWorkerConfigured = false;
-
-function sanitizeTitle(title: string | undefined): string {
-  const value = title?.trim();
-  return value ? value : "Без названия";
-}
-
-function toParentItem(title: string): ParentItem {
-  const match = title.match(/^(\d+(?:\.\d+)*\.?)\s+(.*)$/u);
-
-  if (!match) {
-    return {
-      number: title,
-      label: title,
-      title,
-    };
-  }
-
-  return {
-    number: match[1],
-    label: match[2].trim(),
-    title,
-  };
-}
 
 function stripPageNumberArtifacts(text: string): string {
   return text
@@ -323,24 +294,6 @@ async function materializeOutputItems(
   return output;
 }
 
-function downloadJson(fileName: string, data: OutputItem[]): void {
-  const blob = new Blob([JSON.stringify(data, null, 2)], {
-    type: "application/json",
-  });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-
-  anchor.href = url;
-  anchor.download = fileName;
-  anchor.click();
-
-  URL.revokeObjectURL(url);
-}
-
-function getBaseName(fileName: string): string {
-  return fileName.replace(/\.pdf$/i, "") || "document";
-}
-
 export default function PdfPage() {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
@@ -393,7 +346,10 @@ export default function PdfPage() {
 
       setResult(output);
       setSkippedCount(flatOutline.skippedCount);
-      downloadJson(`${getBaseName(file.name)}-outline.json`, output);
+      downloadOutlineJson(
+        `${outlineJsonBaseName(file.name, "pdf")}-outline.json`,
+        output
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось обработать PDF.");
     } finally {
