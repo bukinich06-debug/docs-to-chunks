@@ -9,8 +9,12 @@ import {
   type OutputItem,
   type ParentItem,
 } from "@/lib/outlineOutput";
+import { fetchImageMetadataFromLlm } from "@shared/api/llmChatCompletions";
 
 const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6";
+
+const IMAGE_DESCRIPTION_START = "\n⟦описание_изображения⟧\n";
+const IMAGE_DESCRIPTION_END = "\n⟦/описание_изображения⟧\n";
 
 export type DocxOutlineBuildResult = {
   items: OutputItem[];
@@ -56,46 +60,6 @@ function stripLeadingTitleDuplicate(body: string, title: string): string {
   }
 
   return body;
-}
-
-function blockElementsToText(
-  $: cheerio.CheerioAPI,
-  $els: cheerio.Cheerio<AnyNode>
-): string {
-  const parts: string[] = [];
-  $els.each((_i, el) => {
-    if (el.type !== "tag") {
-      return;
-    }
-    const name = el.tagName.toLowerCase();
-    if (name === "ul" || name === "ol") {
-      $(el)
-        .find("li")
-        .each((_j, li) => {
-          const chunk = $(li).text().trim();
-          if (chunk) {
-            parts.push(chunk);
-          }
-        });
-      return;
-    }
-    if (name === "table") {
-      $(el)
-        .find("tr")
-        .each((_j, tr) => {
-          const chunk = $(tr).text().replace(/\s+/g, " ").trim();
-          if (chunk) {
-            parts.push(chunk);
-          }
-        });
-      return;
-    }
-    const chunk = $(el).text().trim();
-    if (chunk) {
-      parts.push(chunk);
-    }
-  });
-  return normalizeBlockText(parts.join("\n\n"));
 }
 
 function parseDataUrl(src: string): { contentType: string; buffer: Buffer } | null {
@@ -171,61 +135,204 @@ function textAfterImgInBlock(blockEl: Element, imgEl: Element): string {
   return parts.join(" ").replace(/[ \t]+/g, " ").trim();
 }
 
-function collectSectionImages(
+function wrapImageDescriptionInSectionText(description: string): string {
+  const d = description.trim();
+  if (!d) {
+    return "";
+  }
+  return `${IMAGE_DESCRIPTION_START}${d}${IMAGE_DESCRIPTION_END}`;
+}
+
+async function handleDataImage(
   $: cheerio.CheerioAPI,
-  topLevelNodes: AnyNode[],
+  imgEl: Element,
+  blockEl: Element,
+  blockTag: string,
+  blockIndex: number,
+  siblings: Element[],
+  sectionIndex: number,
+  mediaFiles: Map<string, Buffer>,
+  images: OutlineSectionImage[],
+  imgCounter: { n: number }
+): Promise<string> {
+  const src = $(imgEl).attr("src");
+  if (!src?.startsWith("data:")) return "";
+
+  const parsed = parseDataUrl(src);
+  if (!parsed || parsed.buffer.length === 0) return "";
+
+  const idx = imgCounter.n;
+  const ext = mimeToExtension(parsed.contentType);
+  const relPath = `media/s${sectionIndex}-i${idx}.${ext}`;
+  imgCounter.n += 1;
+  mediaFiles.set(relPath, parsed.buffer);
+
+  let name = `image-s${sectionIndex}-i${idx}`;
+  const inlineCaption =
+    blockTag === "img" ? "" : textAfterImgInBlock(blockEl, imgEl).trim();
+  if (inlineCaption) {
+    name = inlineCaption;
+  } else {
+    const next = siblings[blockIndex + 1];
+    if (next && next.type === "tag" && next.tagName.toLowerCase() === "p") {
+      const cap = $(next).text().trim();
+      if (cap) {
+        name = cap;
+      }
+    }
+  }
+
+  const llm = await fetchImageMetadataFromLlm(parsed.buffer, parsed.contentType);
+  images.push({
+    name,
+    img: relPath,
+    llmname: llm.llmname,
+    description: llm.description,
+    type: llm.type,
+  });
+
+  return wrapImageDescriptionInSectionText(llm.description);
+}
+
+async function fragmentToTextWithImages(
+  $: cheerio.CheerioAPI,
+  fragmentRoot: Element,
+  blockEl: Element,
+  blockTag: string,
+  blockIndex: number,
+  siblings: Element[],
+  sectionIndex: number,
+  mediaFiles: Map<string, Buffer>,
+  images: OutlineSectionImage[],
+  imgCounter: { n: number }
+): Promise<string> {
+  let out = "";
+  for (const node of nodesInDocumentOrder(fragmentRoot)) {
+    if (node.type === "text") {
+      out += node.data.replace(/\u00a0/g, " ");
+      continue;
+    }
+    if (node.type === "tag" && node.tagName.toLowerCase() === "img") {
+      out += await handleDataImage(
+        $,
+        node,
+        blockEl,
+        blockTag,
+        blockIndex,
+        siblings,
+        sectionIndex,
+        mediaFiles,
+        images,
+        imgCounter
+      );
+    }
+  }
+  return out.trim();
+}
+
+async function buildSectionTextAndImages(
+  $: cheerio.CheerioAPI,
+  sectionNodes: AnyNode[],
   sectionIndex: number,
   mediaFiles: Map<string, Buffer>
-): OutlineSectionImage[] {
-  const siblings = topLevelNodes.filter((n): n is Element => n.type === "tag");
+): Promise<{ text: string; images: OutlineSectionImage[] }> {
+  const siblings = sectionNodes.filter((n): n is Element => n.type === "tag");
+  const parts: string[] = [];
   const images: OutlineSectionImage[] = [];
-  let imgIndexInSection = 0;
+  const imgCounter = { n: 0 };
 
   for (let si = 0; si < siblings.length; si += 1) {
     const el = siblings[si];
     const tag = el.tagName.toLowerCase();
-    const $el = $(el);
-    const imgsInBlock: Element[] =
-      tag === "img" ? [el] : $el.find("img").toArray();
 
-    for (const imgEl of imgsInBlock) {
-      if (imgEl.type !== "tag" || imgEl.tagName.toLowerCase() !== "img") {
-        continue;
-      }
-      const src = $(imgEl).attr("src");
-      if (!src?.startsWith("data:")) {
-        continue;
-      }
-      const parsed = parseDataUrl(src);
-      if (!parsed || parsed.buffer.length === 0) {
-        continue;
-      }
-
-      const ext = mimeToExtension(parsed.contentType);
-      const relPath = `media/s${sectionIndex}-i${imgIndexInSection}.${ext}`;
-      imgIndexInSection += 1;
-      mediaFiles.set(relPath, parsed.buffer);
-
-      let name = `image-s${sectionIndex}-i${imgIndexInSection - 1}`;
-      const inlineCaption =
-        tag === "img" ? "" : textAfterImgInBlock(el, imgEl).trim();
-      if (inlineCaption) {
-        name = inlineCaption;
-      } else {
-        const next = siblings[si + 1];
-        if (next && next.type === "tag" && next.tagName.toLowerCase() === "p") {
-          const cap = $(next).text().trim();
-          if (cap) {
-            name = cap;
-          }
+    if (tag === "ul" || tag === "ol") {
+      for (const li of $(el).find("li").toArray()) {
+        if (li.type !== "tag") continue;
+        
+        const chunk = await fragmentToTextWithImages(
+          $,
+          li,
+          el,
+          tag,
+          si,
+          siblings,
+          sectionIndex,
+          mediaFiles,
+          images,
+          imgCounter
+        );
+        if (chunk) {
+          parts.push(chunk);
         }
       }
+      continue;
+    }
 
-      images.push({ name, img: relPath });
+    if (tag === "table") {
+      for (const tr of $(el).find("tr").toArray()) {
+        if (tr.type !== "tag") {
+          continue;
+        }
+        let chunk = await fragmentToTextWithImages(
+          $,
+          tr,
+          el,
+          tag,
+          si,
+          siblings,
+          sectionIndex,
+          mediaFiles,
+          images,
+          imgCounter
+        );
+        chunk = chunk.replace(/\s+/g, " ").trim();
+        if (chunk) {
+          parts.push(chunk);
+        }
+      }
+      continue;
+    }
+
+    if (tag === "img") {
+      const chunk = await handleDataImage(
+        $,
+        el,
+        el,
+        tag,
+        si,
+        siblings,
+        sectionIndex,
+        mediaFiles,
+        images,
+        imgCounter
+      );
+      if (chunk) {
+        parts.push(chunk);
+      }
+      continue;
+    }
+
+    const chunk = await fragmentToTextWithImages(
+      $,
+      el,
+      el,
+      tag,
+      si,
+      siblings,
+      sectionIndex,
+      mediaFiles,
+      images,
+      imgCounter
+    );
+    if (chunk) {
+      parts.push(chunk);
     }
   }
 
-  return images;
+  return {
+    text: normalizeBlockText(parts.join("\n\n")),
+    images,
+  };
 }
 
 export async function buildDocxOutline(
@@ -260,7 +367,6 @@ export async function buildDocxOutline(
 
   const $first = $(headings[0]);
   const preambleSiblings = $first.prevAll().toArray().reverse();
-  const preamble = blockElementsToText($, $(preambleSiblings));
 
   for (let i = 0; i < headings.length; i += 1) {
     const el = headings[i];
@@ -274,16 +380,17 @@ export async function buildDocxOutline(
     const currentItem = toParentItem(headingTitle);
 
     const $between = $(el).nextUntil(HEADING_SELECTOR);
-    let text = blockElementsToText($, $between);
-    text = stripLeadingTitleDuplicate(text, headingTitle);
-    if (i === 0 && preamble) {
-      text = text ? `${preamble}\n\n${text}` : preamble;
-    }
-
     const betweenNodes = $between.toArray();
     const sectionNodes =
       i === 0 ? [...preambleSiblings, ...betweenNodes] : betweenNodes;
-    const images = collectSectionImages($, sectionNodes, i, mediaFiles);
+
+    const { text: sectionText, images } = await buildSectionTextAndImages(
+      $,
+      sectionNodes,
+      i,
+      mediaFiles
+    );
+    const text = stripLeadingTitleDuplicate(sectionText, headingTitle);
 
     stack.push({ level, item: currentItem });
 

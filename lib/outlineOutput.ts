@@ -4,9 +4,14 @@ export type ParentItem = {
   title: string;
 };
 
+export type ImageLlmType = "icon" | "pict";
+
 export type OutlineSectionImage = {
   name: string;
   img: string;
+  llmname: string;
+  description: string;
+  type: ImageLlmType;
 };
 
 export type OutputItem = {
