@@ -5,6 +5,7 @@ import mammoth from "mammoth";
 import {
   sanitizeTitle,
   toParentItem,
+  type ImageLlmType,
   type OutlineSectionImage,
   type OutputItem,
   type ParentItem,
@@ -15,6 +16,12 @@ const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6";
 
 const IMAGE_DESCRIPTION_START = "\n⟦описание_изображения⟧\n";
 const IMAGE_DESCRIPTION_END = "\n⟦/описание_изображения⟧\n";
+const ICON_DESCRIPTION_START = "\n⟦описание_иконки⟧\n";
+const ICON_DESCRIPTION_END = "\n⟦/описание_иконки⟧\n";
+
+function looksLikeFigureCaption(name: string): boolean {
+  return /^\s*(рис\.\s*|рисунок\b)/iu.test(name);
+}
 
 export type DocxOutlineBuildResult = {
   items: OutputItem[];
@@ -77,24 +84,12 @@ function parseDataUrl(src: string): { contentType: string; buffer: Buffer } | nu
 }
 
 function mimeToExtension(contentType: string): string {
-  if (contentType === "image/png") {
-    return "png";
-  }
-  if (contentType === "image/jpeg" || contentType === "image/jpg") {
-    return "jpg";
-  }
-  if (contentType === "image/gif") {
-    return "gif";
-  }
-  if (contentType === "image/webp") {
-    return "webp";
-  }
-  if (contentType === "image/bmp") {
-    return "bmp";
-  }
-  if (contentType === "image/svg+xml") {
-    return "svg";
-  }
+  if (contentType === "image/png") return "png";
+  if (contentType === "image/jpeg" || contentType === "image/jpg") return "jpg";
+  if (contentType === "image/gif") return "gif";
+  if (contentType === "image/webp") return "webp";
+  if (contentType === "image/bmp") return "bmp";
+  if (contentType === "image/svg+xml") return "svg";
   return "bin";
 }
 
@@ -127,19 +122,21 @@ function textAfterImgInBlock(blockEl: Element, imgEl: Element): string {
     }
     if (found && node.type === "text") {
       const t = node.data.replace(/\u00a0/g, " ").trim();
-      if (t) {
-        parts.push(t);
-      }
+      if (t) parts.push(t);
     }
   }
   return parts.join(" ").replace(/[ \t]+/g, " ").trim();
 }
 
-function wrapImageDescriptionInSectionText(description: string): string {
+function wrapImageDescriptionInSectionText(
+  description: string,
+  type: ImageLlmType
+): string {
   const d = description.trim();
-  if (!d) {
-    return "";
-  }
+  if (!d) return "";
+
+  if (type === "icon") return `${ICON_DESCRIPTION_START}${d}${ICON_DESCRIPTION_END}`;
+
   return `${IMAGE_DESCRIPTION_START}${d}${IMAGE_DESCRIPTION_END}`;
 }
 
@@ -183,15 +180,17 @@ async function handleDataImage(
   }
 
   const llm = await fetchImageMetadataFromLlm(parsed.buffer, parsed.contentType);
+  const normalizedName = looksLikeFigureCaption(name) || !llm.llmname?.trim() ? name : llm.llmname;
+
   images.push({
-    name,
+    name: name,
     img: relPath,
     llmname: llm.llmname,
     description: llm.description,
     type: llm.type,
   });
 
-  return wrapImageDescriptionInSectionText(llm.description);
+  return wrapImageDescriptionInSectionText(llm.description, llm.type);
 }
 
 async function fragmentToTextWithImages(
@@ -248,7 +247,7 @@ async function buildSectionTextAndImages(
     if (tag === "ul" || tag === "ol") {
       for (const li of $(el).find("li").toArray()) {
         if (li.type !== "tag") continue;
-        
+
         const chunk = await fragmentToTextWithImages(
           $,
           li,
@@ -401,9 +400,9 @@ export async function buildDocxOutline(
       text,
       parents,
     };
-    if (images.length) {
-      item.images = images;
-    }
+
+    if (images.length) item.images = images;
+    
     output.push(item);
   }
 

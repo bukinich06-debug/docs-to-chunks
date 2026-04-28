@@ -86,7 +86,7 @@ export async function fetchImageMetadataFromLlm(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "QuantTrio/Qwen3.6-35B-A3B-AWQ",
+        model: "QuantTrio/Qwen3.6-27B-AWQ",
         messages: [
           {
             role: "user",
