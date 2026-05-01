@@ -14,13 +14,29 @@ import { fetchImageMetadataFromLlm } from "@shared/api/llmChatCompletions";
 
 const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6";
 
-const IMAGE_DESCRIPTION_START = "\n⟦описание_изображения⟧\n";
-const IMAGE_DESCRIPTION_END = "\n⟦/описание_изображения⟧\n";
-const ICON_DESCRIPTION_START = "\n⟦описание_иконки⟧\n";
-const ICON_DESCRIPTION_END = "\n⟦/описание_иконки⟧\n";
+const IMAGE_DESCRIPTION_START = "\n⟦img⟧\n";
+const IMAGE_DESCRIPTION_END = "\n⟦/img⟧\n";
+const ICON_DESCRIPTION_START = "\n⟦icon⟧\n";
+const ICON_DESCRIPTION_END = "\n⟦/icon⟧\n";
 
-function looksLikeFigureCaption(name: string): boolean {
-  return /^\s*(рис\.\s*|рисунок\b)/iu.test(name);
+function imageDescriptionStartWithPath(relPath: string): string {
+  const p = relPath.trim();
+  if (!p) return IMAGE_DESCRIPTION_START;
+  return `\n⟦img path="${p}"⟧\n`;
+}
+
+function escapeIconDelimiterAttr(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function iconDescriptionStartWithPath(relPath: string, llmname: string): string {
+  const p = relPath.trim();
+  const nameEscaped = escapeIconDelimiterAttr(llmname.trim());
+  if (!p && !llmname.trim()) return ICON_DESCRIPTION_START;
+  const attrs: string[] = [];
+  if (p) attrs.push(`path="${escapeIconDelimiterAttr(p)}"`);
+  attrs.push(`name="${nameEscaped}"`);
+  return `\n⟦icon ${attrs.join(" ")}⟧\n`;
 }
 
 export type DocxOutlineBuildResult = {
@@ -128,16 +144,75 @@ function textAfterImgInBlock(blockEl: Element, imgEl: Element): string {
   return parts.join(" ").replace(/[ \t]+/g, " ").trim();
 }
 
+/** Текст в том же блоке, что и img, ДО тега (подпись может быть перед картинкой). */
+function textBeforeImgInBlock(blockEl: Element, imgEl: Element): string {
+  const parts: string[] = [];
+  for (const node of nodesInDocumentOrder(blockEl)) {
+    if (node === imgEl) break;
+    if (node.type === "text") {
+      const t = node.data.replace(/\u00a0/g, " ").trim();
+      if (t) parts.push(t);
+    }
+  }
+  return parts.join(" ").replace(/[ \t]+/g, " ").trim();
+}
+
+/**
+ * Находит ближайшую подпись к изображению, которая начинается с "Рис." / "Рисунок".
+ * Ищем в порядке приоритета:
+ * - внутри того же блока после img
+ * - следующий(е) абзац(ы) <p> после блока
+ * - внутри того же блока до img
+ * - предыдущий(е) абзац(ы) <p> перед блоком
+ *
+ * Если не нашли — возвращаем null.
+ */
+function findNearestFigureCaption(
+  $: cheerio.CheerioAPI,
+  imgEl: Element,
+  blockEl: Element,
+  blockIndex: number,
+  siblings: Element[]
+): string | null {
+  const inlineAfter = textAfterImgInBlock(blockEl, imgEl).trim();
+  if (inlineAfter) {
+    return inlineAfter;
+  }
+
+  for (let i = blockIndex + 1; i < siblings.length; i += 1) {
+    const el = siblings[i];
+    if (el.type !== "tag" || el.tagName.toLowerCase() !== "p") continue;
+    const t = $(el).text().trim();
+    if (t) return t;
+  }
+
+  const inlineBefore = textBeforeImgInBlock(blockEl, imgEl).trim();
+  if (inlineBefore) {
+    return inlineBefore;
+  }
+
+  for (let i = blockIndex - 1; i >= 0; i -= 1) {
+    const el = siblings[i];
+    if (el.type !== "tag" || el.tagName.toLowerCase() !== "p") continue;
+    const t = $(el).text().trim();
+    if (t) return t;
+  }
+
+  return null;
+}
+
 function wrapImageDescriptionInSectionText(
   description: string,
-  type: ImageLlmType
+  type: ImageLlmType,
+  relPath: string,
+  llmname: string
 ): string {
   const d = description.trim();
   if (!d) return "";
 
-  if (type === "icon") return `${ICON_DESCRIPTION_START}${d}${ICON_DESCRIPTION_END}`;
+  if (type === "icon") return `${iconDescriptionStartWithPath(relPath, llmname)}${d}${ICON_DESCRIPTION_END}`;
 
-  return `${IMAGE_DESCRIPTION_START}${d}${IMAGE_DESCRIPTION_END}`;
+  return `${imageDescriptionStartWithPath(relPath)}${d}${IMAGE_DESCRIPTION_END}`;
 }
 
 async function handleDataImage(
@@ -160,28 +235,22 @@ async function handleDataImage(
 
   const idx = imgCounter.n;
   const ext = mimeToExtension(parsed.contentType);
-  const relPath = `media/s${sectionIndex}-i${idx}.${ext}`;
+  const relPathImg = `img/s${sectionIndex}-i${idx}.${ext}`;
+  const relPathIcon = `icon/s${sectionIndex}-i${idx}.${ext}`;
   imgCounter.n += 1;
-  mediaFiles.set(relPath, parsed.buffer);
 
-  let name = `image-s${sectionIndex}-i${idx}`;
-  const inlineCaption =
-    blockTag === "img" ? "" : textAfterImgInBlock(blockEl, imgEl).trim();
-  if (inlineCaption) {
-    name = inlineCaption;
-  } else {
-    const next = siblings[blockIndex + 1];
-    if (next && next.type === "tag" && next.tagName.toLowerCase() === "p") {
-      const cap = $(next).text().trim();
-      if (cap) {
-        name = cap;
-      }
-    }
-  }
-
+  let name = '';
+  const cap = blockTag === "img" ? null : findNearestFigureCaption($, imgEl, blockEl, blockIndex, siblings);
+  if (cap) name = cap;
+  
   const llm = await fetchImageMetadataFromLlm(parsed.buffer, parsed.contentType);
-  const normalizedName = looksLikeFigureCaption(name) || !llm.llmname?.trim() ? name : llm.llmname;
+  if (llm.type === 'icon') name = llm.llmname;
 
+  if (!name || name.trim() === '') name = llm.llmname;
+  if (llm.type === 'pict') mediaFiles.set(relPathImg, parsed.buffer);
+  if (llm.type === 'icon') mediaFiles.set(relPathIcon, parsed.buffer);
+
+  const relPath = llm.type === 'pict' ? relPathImg : relPathIcon;
   images.push({
     name: name,
     img: relPath,
@@ -190,7 +259,7 @@ async function handleDataImage(
     type: llm.type,
   });
 
-  return wrapImageDescriptionInSectionText(llm.description, llm.type);
+  return wrapImageDescriptionInSectionText(llm.description, llm.type, relPath, llm.llmname);
 }
 
 async function fragmentToTextWithImages(
