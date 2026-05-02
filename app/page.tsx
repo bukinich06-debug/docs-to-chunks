@@ -192,7 +192,7 @@ export default function Home() {
                 JSON-файл с массивом объектов
               </label>
               <p className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">
-                <code>[{"{ id, label, title, text, parents }"}]</code>
+                <code>[{"{ number, label, title, text, parents, images? }"}]</code>
               </p>
               <input
                 id="file-json"
@@ -204,9 +204,10 @@ export default function Home() {
               />
             </div>
             <p className="max-w-3xl text-sm text-zinc-600 dark:text-zinc-400">
-              Каждый объект должен содержать поля <code>id</code>, <code>label</code>, <code>title</code>,
-              <code>text</code> и массив <code>parents</code>. В ответе поле <code>text</code> будет заменено на
-              массив <code>chunks</code>.
+              Каждый объект должен содержать поля <code>number</code>, <code>label</code>, <code>title</code>,{" "}
+              <code>text</code> и массив <code>parents</code>. Опционально — <code>images</code> (как в outline из
+              DOCX). В ответе добавляется <code>sourceText</code> и массив <code>chunks</code>: объекты{" "}
+              <code>{"{ text, images }"}</code> с полной метой изображений для чанка.
             </p>
             <button
               type="submit"
@@ -229,6 +230,18 @@ export default function Home() {
             <div className="flex items-center justify-between gap-4">
               <p className="text-sm text-zinc-600 dark:text-zinc-400">
                 Всего чанков: {result.items.reduce((n, item) => n + item.chunks.length, 0)}
+                {result.kind === "json" && (
+                  <>
+                    {" "}
+                    · привязок к изображениям:{" "}
+                    {result.items.reduce(
+                      (n, item) =>
+                        n +
+                        item.chunks.reduce((m, ch) => m + ch.images.length, 0),
+                      0
+                    )}
+                  </>
+                )}
               </p>
               <button
                 type="button"
@@ -302,11 +315,15 @@ export default function Home() {
                       </section>
                       <section className="flex min-h-0 flex-col">
                         <h3 className="mb-3 text-lg font-medium text-zinc-800 dark:text-zinc-200">
-                          Чанки ({item.chunks.length})
+                          Чанки ({item.chunks.length}
+                          {item.chunks.length > 0
+                            ? ` · изобр.: ${item.chunks.reduce((n, ch) => n + ch.images.length, 0)}`
+                            : ""}
+                          )
                         </h3>
                         <div className="min-h-0 flex-1 overflow-y-auto">
                           <ul className="space-y-4">
-                            {item.chunks.map((text, i) => (
+                            {item.chunks.map((chunk, i) => (
                               <li
                                 key={i}
                                 className="rounded-lg border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-700 dark:bg-zinc-900"
@@ -314,7 +331,35 @@ export default function Home() {
                                 <span className="mb-2 block text-xs font-medium text-zinc-500 dark:text-zinc-400">
                                   Блок {i + 1}
                                 </span>
-                                <p className="whitespace-pre-wrap text-sm text-zinc-800 dark:text-zinc-200">{text}</p>
+                                <p className="whitespace-pre-wrap text-sm text-zinc-800 dark:text-zinc-200">
+                                  {chunk.text}
+                                </p>
+                                {chunk.images.length > 0 && (
+                                  <div className="mt-3 space-y-2 border-t border-zinc-200 pt-3 dark:border-zinc-600">
+                                    <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                                      Связанные изображения
+                                    </p>
+                                    <ul className="space-y-2">
+                                      {chunk.images.map((img) => (
+                                        <li
+                                          key={img.img}
+                                          className="rounded-md bg-zinc-50 p-2 text-xs dark:bg-zinc-800/80"
+                                        >
+                                          <span className="mr-2 inline-block rounded bg-zinc-200 px-1.5 py-0.5 font-medium text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200">
+                                            {img.type === "icon" ? "Иконка" : "Скриншот"}
+                                          </span>
+                                          <span className="font-medium text-zinc-800 dark:text-zinc-100">
+                                            {img.name}
+                                          </span>
+                                          <p className="mt-1 text-zinc-600 dark:text-zinc-300">{img.llmname}</p>
+                                          <p className="mt-0.5 font-mono text-[11px] text-zinc-500 dark:text-zinc-400">
+                                            {img.img}
+                                          </p>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
                               </li>
                             ))}
                           </ul>

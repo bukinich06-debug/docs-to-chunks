@@ -127,6 +127,133 @@ function* nodesInDocumentOrder(root: Element): Generator<AnyNode> {
   }
 }
 
+function normalizeCaptionText(text: string): string {
+  return text.replace(/\u00a0/g, " ").replace(/[ \t]+/g, " ").trim();
+}
+
+/** Подпись к рисунку в стиле «Рис. …» / «Рисунок …». */
+function isFigureCaption(text: string): boolean {
+  const t = normalizeCaptionText(text);
+  if (!t) return false;
+  return /^Рис\./i.test(t) || /^Рисунок\b/i.test(t);
+}
+
+/**
+ * Ищет в элементе-соседе (p / обёртка / li) первый текст, похожий на подпись к рисунку.
+ */
+function firstFigureCaptionInSiblingEl($: cheerio.CheerioAPI, el: Element): string | null {
+  const tag = el.tagName.toLowerCase();
+  if (tag === "p") {
+    const t = normalizeCaptionText($(el).text());
+    return t && isFigureCaption(t) ? t : null;
+  }
+  if (tag === "div" || tag === "center" || tag === "li") {
+    for (const p of $(el).find("p").toArray()) {
+      const t = normalizeCaptionText($(p).text());
+      if (t && isFigureCaption(t)) return t;
+    }
+    const t = normalizeCaptionText($(el).text());
+    return t && isFigureCaption(t) ? t : null;
+  }
+  return null;
+}
+
+function blockSubtreeHasImg(el: Element): boolean {
+  for (const node of nodesInDocumentOrder(el)) {
+    if (node.type === "tag" && node.tagName.toLowerCase() === "img") {
+      return true;
+    }
+  }
+  return false;
+}
+
+type FigureCaptionEv = { t: "img"; el: Element } | { t: "cap"; text: string };
+
+/**
+ * Порядок событий совпадает с порядком обхода изображений в buildSectionTextAndImages.
+ * Подпись «Рис. …» в отдельном блоке относится только к последнему img перед ней.
+ */
+function collectFigureCaptionEvents($: cheerio.CheerioAPI, siblings: Element[]): FigureCaptionEv[] {
+  const events: FigureCaptionEv[] = [];
+
+  function emitImgsFromFragmentRoot(fragmentRoot: Element, blockEl: Element) {
+    for (const node of nodesInDocumentOrder(fragmentRoot)) {
+      if (node.type !== "tag" || node.tagName.toLowerCase() !== "img") continue;
+      events.push({ t: "img", el: node });
+      const after = normalizeCaptionText(textAfterImgInBlock(blockEl, node));
+      if (after && isFigureCaption(after)) {
+        events.push({ t: "cap", text: after });
+      }
+    }
+  }
+
+  function maybeEmitStandaloneCaptionBlock(blockEl: Element) {
+    if (blockSubtreeHasImg(blockEl)) return;
+    const cap = firstFigureCaptionInSiblingEl($, blockEl);
+    if (cap) events.push({ t: "cap", text: cap });
+  }
+
+  for (let si = 0; si < siblings.length; si += 1) {
+    const el = siblings[si];
+    const tag = el.tagName.toLowerCase();
+
+    if (tag === "ul" || tag === "ol") {
+      for (const li of $(el).find("li").toArray()) {
+        if (li.type !== "tag") continue;
+        emitImgsFromFragmentRoot(li, el);
+        maybeEmitStandaloneCaptionBlock(li);
+      }
+      continue;
+    }
+
+    if (tag === "table") {
+      for (const tr of $(el).find("tr").toArray()) {
+        if (tr.type !== "tag") continue;
+        emitImgsFromFragmentRoot(tr, el);
+        maybeEmitStandaloneCaptionBlock(tr);
+      }
+      continue;
+    }
+
+    if (tag === "img") {
+      events.push({ t: "img", el });
+      continue;
+    }
+
+    emitImgsFromFragmentRoot(el, el);
+    maybeEmitStandaloneCaptionBlock(el);
+  }
+
+  return events;
+}
+
+/** Сопоставление: подпись после группы img — только последнему; подпись до первого img — очередь orphan. */
+function figureCaptionByImgFromEvents(events: FigureCaptionEv[]): Map<Element, string> {
+  const map = new Map<Element, string>();
+  const pending: Element[] = [];
+  const orphanCaps: string[] = [];
+
+  for (const ev of events) {
+    if (ev.t === "img") {
+      if (orphanCaps.length > 0) {
+        map.set(ev.el, orphanCaps.shift()!);
+      } else {
+        pending.push(ev.el);
+      }
+    } else {
+      if (pending.length > 0) {
+        const target = pending[pending.length - 1];
+        map.set(target, ev.text);
+        pending.length = 0;
+      } else {
+        orphanCaps.push(ev.text);
+      }
+    }
+  }
+
+  return map;
+}
+
 /** Текст в том же блоке, что и img, после тега (подпись «Рисунок N — …» в одном p с картинкой). */
 function textAfterImgInBlock(blockEl: Element, imgEl: Element): string {
   const parts: string[] = [];
@@ -142,63 +269,6 @@ function textAfterImgInBlock(blockEl: Element, imgEl: Element): string {
     }
   }
   return parts.join(" ").replace(/[ \t]+/g, " ").trim();
-}
-
-/** Текст в том же блоке, что и img, ДО тега (подпись может быть перед картинкой). */
-function textBeforeImgInBlock(blockEl: Element, imgEl: Element): string {
-  const parts: string[] = [];
-  for (const node of nodesInDocumentOrder(blockEl)) {
-    if (node === imgEl) break;
-    if (node.type === "text") {
-      const t = node.data.replace(/\u00a0/g, " ").trim();
-      if (t) parts.push(t);
-    }
-  }
-  return parts.join(" ").replace(/[ \t]+/g, " ").trim();
-}
-
-/**
- * Находит ближайшую подпись к изображению, которая начинается с "Рис." / "Рисунок".
- * Ищем в порядке приоритета:
- * - внутри того же блока после img
- * - следующий(е) абзац(ы) <p> после блока
- * - внутри того же блока до img
- * - предыдущий(е) абзац(ы) <p> перед блоком
- *
- * Если не нашли — возвращаем null.
- */
-function findNearestFigureCaption(
-  $: cheerio.CheerioAPI,
-  imgEl: Element,
-  blockEl: Element,
-  blockIndex: number,
-  siblings: Element[]
-): string | null {
-  const inlineAfter = textAfterImgInBlock(blockEl, imgEl).trim();
-  if (inlineAfter) {
-    return inlineAfter;
-  }
-
-  for (let i = blockIndex + 1; i < siblings.length; i += 1) {
-    const el = siblings[i];
-    if (el.type !== "tag" || el.tagName.toLowerCase() !== "p") continue;
-    const t = $(el).text().trim();
-    if (t) return t;
-  }
-
-  const inlineBefore = textBeforeImgInBlock(blockEl, imgEl).trim();
-  if (inlineBefore) {
-    return inlineBefore;
-  }
-
-  for (let i = blockIndex - 1; i >= 0; i -= 1) {
-    const el = siblings[i];
-    if (el.type !== "tag" || el.tagName.toLowerCase() !== "p") continue;
-    const t = $(el).text().trim();
-    if (t) return t;
-  }
-
-  return null;
 }
 
 function wrapImageDescriptionInSectionText(
@@ -218,10 +288,7 @@ function wrapImageDescriptionInSectionText(
 async function handleDataImage(
   $: cheerio.CheerioAPI,
   imgEl: Element,
-  blockEl: Element,
-  blockTag: string,
-  blockIndex: number,
-  siblings: Element[],
+  captionByImg: ReadonlyMap<Element, string>,
   sectionIndex: number,
   mediaFiles: Map<string, Buffer>,
   images: OutlineSectionImage[],
@@ -239,8 +306,8 @@ async function handleDataImage(
   const relPathIcon = `icon/s${sectionIndex}-i${idx}.${ext}`;
   imgCounter.n += 1;
 
-  let name = '';
-  const cap = blockTag === "img" ? null : findNearestFigureCaption($, imgEl, blockEl, blockIndex, siblings);
+  let name = "";
+  const cap = captionByImg.get(imgEl);
   if (cap) name = cap;
   
   const llm = await fetchImageMetadataFromLlm(parsed.buffer, parsed.contentType);
@@ -265,10 +332,7 @@ async function handleDataImage(
 async function fragmentToTextWithImages(
   $: cheerio.CheerioAPI,
   fragmentRoot: Element,
-  blockEl: Element,
-  blockTag: string,
-  blockIndex: number,
-  siblings: Element[],
+  captionByImg: ReadonlyMap<Element, string>,
   sectionIndex: number,
   mediaFiles: Map<string, Buffer>,
   images: OutlineSectionImage[],
@@ -284,10 +348,7 @@ async function fragmentToTextWithImages(
       out += await handleDataImage(
         $,
         node,
-        blockEl,
-        blockTag,
-        blockIndex,
-        siblings,
+        captionByImg,
         sectionIndex,
         mediaFiles,
         images,
@@ -305,6 +366,7 @@ async function buildSectionTextAndImages(
   mediaFiles: Map<string, Buffer>
 ): Promise<{ text: string; images: OutlineSectionImage[] }> {
   const siblings = sectionNodes.filter((n): n is Element => n.type === "tag");
+  const captionByImg = figureCaptionByImgFromEvents(collectFigureCaptionEvents($, siblings));
   const parts: string[] = [];
   const images: OutlineSectionImage[] = [];
   const imgCounter = { n: 0 };
@@ -320,10 +382,7 @@ async function buildSectionTextAndImages(
         const chunk = await fragmentToTextWithImages(
           $,
           li,
-          el,
-          tag,
-          si,
-          siblings,
+          captionByImg,
           sectionIndex,
           mediaFiles,
           images,
@@ -344,10 +403,7 @@ async function buildSectionTextAndImages(
         let chunk = await fragmentToTextWithImages(
           $,
           tr,
-          el,
-          tag,
-          si,
-          siblings,
+          captionByImg,
           sectionIndex,
           mediaFiles,
           images,
@@ -365,10 +421,7 @@ async function buildSectionTextAndImages(
       const chunk = await handleDataImage(
         $,
         el,
-        el,
-        tag,
-        si,
-        siblings,
+        captionByImg,
         sectionIndex,
         mediaFiles,
         images,
@@ -383,10 +436,7 @@ async function buildSectionTextAndImages(
     const chunk = await fragmentToTextWithImages(
       $,
       el,
-      el,
-      tag,
-      si,
-      siblings,
+      captionByImg,
       sectionIndex,
       mediaFiles,
       images,

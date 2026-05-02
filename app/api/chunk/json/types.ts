@@ -1,3 +1,5 @@
+import type { OutlineSectionImage } from "@/lib/outlineOutput";
+
 export interface IJsonChunkParent {
   number: string;
   label: string;
@@ -10,6 +12,12 @@ export interface IJsonChunkInputItem {
   title: string;
   text: string;
   parents: IJsonChunkParent[];
+  images?: OutlineSectionImage[];
+}
+
+export interface IJsonOutputChunk {
+  text: string;
+  images: OutlineSectionImage[];
 }
 
 export interface IJsonChunkOutputItem {
@@ -18,5 +26,5 @@ export interface IJsonChunkOutputItem {
   title: string;
   parents: IJsonChunkParent[];
   sourceText: string;
-  chunks: string[];
+  chunks: IJsonOutputChunk[];
 }

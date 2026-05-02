@@ -1,3 +1,4 @@
+import type { OutlineSectionImage } from "@/lib/outlineOutput";
 import { ChunkError } from "../chunkService";
 import { chunkParts } from "./chunkPartsService";
 import { IJsonChunkInputItem, IJsonChunkOutputItem, IJsonChunkParent } from "./types";
@@ -37,6 +38,55 @@ function parseParent(parent: unknown, index: number, itemIndex: number): IJsonCh
   };
 }
 
+function parseSectionImage(
+  img: unknown,
+  itemIndex: number,
+  imageIndex: number
+): OutlineSectionImage {
+  if (img === null || typeof img !== "object") {
+    throw new ChunkError(
+      `Элемент images[${imageIndex}] у записи [${itemIndex}] должен быть объектом.`,
+      400
+    );
+  }
+
+  const r = img as Record<string, unknown>;
+  const type = r.type;
+  if (type !== "icon" && type !== "pict") {
+    throw new ChunkError(
+      `Поле type у images[${imageIndex}] записи [${itemIndex}] должно быть "icon" или "pict".`,
+      400
+    );
+  }
+
+  return {
+    name: getRequiredString(r.name, `Поле name у images[${imageIndex}] записи [${itemIndex}]`),
+    img: getRequiredString(r.img, `Поле img у images[${imageIndex}] записи [${itemIndex}]`),
+    llmname: getRequiredString(
+      r.llmname,
+      `Поле llmname у images[${imageIndex}] записи [${itemIndex}]`
+    ),
+    description: getRequiredString(
+      r.description,
+      `Поле description у images[${imageIndex}] записи [${itemIndex}]`
+    ),
+    type,
+  };
+}
+
+function parseOptionalImages(
+  record: Record<string, unknown>,
+  itemIndex: number
+): OutlineSectionImage[] | undefined {
+  if (record.images === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(record.images)) {
+    throw new ChunkError(`Поле images у элемента [${itemIndex}] должно быть массивом.`, 400);
+  }
+  return record.images.map((img, j) => parseSectionImage(img, itemIndex, j));
+}
+
 const getPartInfo = (parsed: unknown): IJsonChunkInputItem[] => {
   if (!Array.isArray(parsed)) {
     throw new ChunkError("JSON должен быть массивом объектов с полями number, label, title, text, parents.", 400);
@@ -56,13 +106,20 @@ const getPartInfo = (parsed: unknown): IJsonChunkInputItem[] => {
       throw new ChunkError(`Поле parents у элемента [${i}] должно быть массивом.`, 400);
     }
 
-    parts.push({
+    const input: IJsonChunkInputItem = {
       number: getRequiredString(record.number, `Поле number у элемента [${i}]`),
       label: getRequiredString(record.label, `Поле label у элемента [${i}]`),
       title: getRequiredString(record.title, `Поле title у элемента [${i}]`),
       text: getRequiredString(record.text, `Поле text у элемента [${i}]`),
       parents: parents.map((parent, parentIndex) => parseParent(parent, parentIndex, i)),
-    });
+    };
+
+    const images = parseOptionalImages(record, i);
+    if (images !== undefined) {
+      input.images = images;
+    }
+
+    parts.push(input);
   }
 
   return parts;
