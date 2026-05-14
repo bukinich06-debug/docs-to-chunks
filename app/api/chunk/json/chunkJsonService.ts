@@ -87,7 +87,8 @@ function parseOptionalImages(
   return record.images.map((img, j) => parseSectionImage(img, itemIndex, j));
 }
 
-const getPartInfo = (parsed: unknown): IJsonChunkInputItem[] => {
+/** Разбор массива входных объектов (как в загружаемом JSON). */
+export function parseJsonChunkInputArray(parsed: unknown): IJsonChunkInputItem[] {
   if (!Array.isArray(parsed)) {
     throw new ChunkError("JSON должен быть массивом объектов с полями number, label, title, text, parents.", 400);
   }
@@ -123,7 +124,20 @@ const getPartInfo = (parsed: unknown): IJsonChunkInputItem[] => {
   }
 
   return parts;
-};
+}
+
+/**
+ * Один раздел из того же формата, что элемент массива входного JSON.
+ */
+export async function chunkSingleJsonSection(section: unknown): Promise<IJsonChunkOutputItem> {
+  const parts = parseJsonChunkInputArray([section]);
+  const out = await chunkParts(parts);
+  const first = out[0];
+  if (!first) {
+    throw new ChunkError("Не удалось получить результат чанкинга для раздела.", 500);
+  }
+  return first;
+}
 
 /**
  * Читает JSON-файл с массивом объектов и для каждого text запускает пайплайн чанкинга.
@@ -147,7 +161,7 @@ export async function chunkFromChunksJsonFile(file: File): Promise<IJsonChunkOut
     throw new ChunkError("Невалидный JSON.", 400);
   }
 
-  const parts = getPartInfo(parsed);
-  
+  const parts = parseJsonChunkInputArray(parsed);
+
   return chunkParts(parts);
 }

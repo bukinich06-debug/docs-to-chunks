@@ -17,10 +17,14 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ResultState>(null);
   const [error, setError] = useState<string | null>(null);
+  const [jsonSourceSections, setJsonSourceSections] = useState<unknown[] | null>(null);
+  const [retryingSection, setRetryingSection] = useState<{ kind: TabId; index: number } | null>(null);
 
   const resetResult = () => {
     setResult(null);
     setError(null);
+    setJsonSourceSections(null);
+    setRetryingSection(null);
   };
 
   const handleTabChange = (tab: TabId) => {
@@ -76,13 +80,36 @@ export default function Home() {
     e.preventDefault();
     if (!jsonFile) return;
 
-    setLoading(true);
     setError(null);
     setResult(null);
+    setJsonSourceSections(null);
+
+    let raw: string;
+    try {
+      raw = await jsonFile.text();
+    } catch {
+      setError("Не удалось прочитать файл.");
+      return;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw) as unknown;
+    } catch {
+      setError("Невалидный JSON.");
+      return;
+    }
+
+    if (!Array.isArray(parsed)) {
+      setError("JSON должен быть массивом объектов.");
+      return;
+    }
+
+    setLoading(true);
 
     try {
       const formData = new FormData();
-      formData.set("file", jsonFile);
+      formData.set("file", new File([raw], jsonFile.name, { type: "application/json" }));
 
       const res = await fetch("/api/chunk/json", {
         method: "POST",
@@ -96,6 +123,7 @@ export default function Home() {
         return;
       }
 
+      setJsonSourceSections(parsed);
       setResult({ kind: "json", items: Array.isArray(data) ? data : [] });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
@@ -103,6 +131,96 @@ export default function Home() {
       setLoading(false);
     }
   };
+
+  const handleRetryJsonSection = async (blockIndex: number) => {
+    if (result?.kind !== "json" || !jsonSourceSections) return;
+    const section = jsonSourceSections[blockIndex];
+    if (section === undefined) {
+      setError("Нет исходных данных для этого раздела. Обработайте JSON заново.");
+      return;
+    }
+
+    setRetryingSection({ kind: "json", index: blockIndex });
+    setError(null);
+
+    try {
+      const res = await fetch("/api/chunk/json/section", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ section }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setError(data.error ?? `Error ${res.status}`);
+        return;
+      }
+
+      const item = data.item as IJsonChunkOutputItem | undefined;
+      if (!item) {
+        setError("Пустой ответ сервера.");
+        return;
+      }
+
+      setResult((prev) => {
+        if (prev?.kind !== "json") return prev;
+        return {
+          kind: "json",
+          items: prev.items.map((it, i) => (i === blockIndex ? item : it)),
+        };
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Request failed");
+    } finally {
+      setRetryingSection(null);
+    }
+  };
+
+  const handleRetryDocumentPart = async (blockIndex: number) => {
+    if (result?.kind !== "document") return;
+    const part = result.items[blockIndex]?.part;
+    if (part === undefined) return;
+
+    setRetryingSection({ kind: "document", index: blockIndex });
+    setError(null);
+
+    try {
+      const res = await fetch("/api/chunk/document-part", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: part }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setError(data.error ?? `Error ${res.status}`);
+        return;
+      }
+
+      const item = data.item as IPartWithChunks | undefined;
+      if (!item) {
+        setError("Пустой ответ сервера.");
+        return;
+      }
+
+      setResult((prev) => {
+        if (prev?.kind !== "document") return prev;
+        return {
+          kind: "document",
+          items: prev.items.map((it, i) => (i === blockIndex ? item : it)),
+        };
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Request failed");
+    } finally {
+      setRetryingSection(null);
+    }
+  };
+
+  const isRetrying = (kind: TabId, index: number) =>
+    retryingSection?.kind === kind && retryingSection.index === index;
 
   const hasResult = result !== null;
 
@@ -256,9 +374,19 @@ export default function Home() {
                 <div key={blockIndex}>
                   <div className="grid grid-cols-1 gap-6 lg:grid-cols-2" style={{ minHeight: "40vh" }}>
                     <section className="flex min-h-0 flex-col">
-                      <h2 className="mb-3 text-lg font-medium text-zinc-800 dark:text-zinc-200">
-                        Часть {blockIndex + 1} (текст для LLM)
-                      </h2>
+                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                        <h2 className="text-lg font-medium text-zinc-800 dark:text-zinc-200">
+                          Часть {blockIndex + 1} (текст для LLM)
+                        </h2>
+                        <button
+                          type="button"
+                          onClick={() => void handleRetryDocumentPart(blockIndex)}
+                          disabled={loading || isRetrying("document", blockIndex)}
+                          className="shrink-0 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                        >
+                          {isRetrying("document", blockIndex) ? "Повтор…" : "Повтор"}
+                        </button>
+                      </div>
                       <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
                         <p className="whitespace-pre-wrap p-4 text-sm text-zinc-800 dark:text-zinc-200">{item.part}</p>
                       </div>
@@ -293,14 +421,28 @@ export default function Home() {
               result.items.map((item, blockIndex) => {
                 return (
                   <div key={`${item.number}-${blockIndex}`}>
-                    <div className="mb-3 space-y-1">
-                      <h2 className="text-lg font-medium text-zinc-800 dark:text-zinc-200">{item.title}</h2>
-                      <p className="text-sm text-zinc-600 dark:text-zinc-400">Number: {item.number}</p>
-                      {item.parents.length > 0 && (
-                        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                          Родители: {item.parents.map((parent) => parent.title).join(" / ")}
-                        </p>
-                      )}
+                    <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0 space-y-1">
+                        <h2 className="text-lg font-medium text-zinc-800 dark:text-zinc-200">{item.title}</h2>
+                        <p className="text-sm text-zinc-600 dark:text-zinc-400">Number: {item.number}</p>
+                        {item.parents.length > 0 && (
+                          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                            Родители: {item.parents.map((parent) => parent.title).join(" / ")}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void handleRetryJsonSection(blockIndex)}
+                        disabled={
+                          loading ||
+                          !jsonSourceSections ||
+                          isRetrying("json", blockIndex)
+                        }
+                        className="shrink-0 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
+                      >
+                        {isRetrying("json", blockIndex) ? "Повтор…" : "Повтор"}
+                      </button>
                     </div>
                     <div className="grid grid-cols-1 gap-6 lg:grid-cols-2" style={{ minHeight: "40vh" }}>
                       <section className="flex min-h-0 flex-col">

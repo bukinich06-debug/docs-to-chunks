@@ -45,6 +45,39 @@ export interface IChunkDocumentResult {
 }
 
 /**
+ * Один фрагмент текста: три прогона LLM и семантическое объединение чанков.
+ */
+export async function chunkDocumentPart(text: string): Promise<IPartWithChunks> {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new ChunkError("Пустой текст.", 400);
+  }
+
+  const runs: string[][] = [];
+  try {
+    const [chunks1, chunks2, chunks3] = await Promise.all([
+      callLLMWithRetry(trimmed),
+      callLLMWithRetry(trimmed),
+      callLLMWithRetry(trimmed),
+    ]);
+    runs.push(chunks1, chunks2, chunks3);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Не удалось сгенерировать фрагменты.";
+    throw new ChunkError(message, 500);
+  }
+
+  let mergedChunks: string[];
+  try {
+    mergedChunks = await mergeChunksSemantically(runs);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Не удалось объединить фрагменты кода.";
+    throw new ChunkError(message, 500);
+  }
+
+  return { part: trimmed, chunks: mergedChunks };
+}
+
+/**
  * Извлекает текст из файла, разбивает на части, для каждой части запрашивает чанки у LLM (Ollama или vLLM по LLM_BACKEND),
  * постобрабатывает и возвращает результат. Выбрасывает ChunkError при ошибках валидации или LLM.
  */
@@ -70,27 +103,7 @@ export async function chunkDocument(file: File): Promise<IChunkDocumentResult> {
 
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
-    const runs: string[][] = [];
-    try {
-      const [chunks1, chunks2, chunks3] = await Promise.all([
-        callLLMWithRetry(part),
-        callLLMWithRetry(part),
-        callLLMWithRetry(part),
-      ]);
-      runs.push(chunks1, chunks2, chunks3);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Не удалось сгенерировать фрагменты.";
-      throw new ChunkError(message, 500);
-    }
-
-    let mergedChunks: string[];
-    try {
-      mergedChunks = await mergeChunksSemantically(runs);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Не удалось объединить фрагменты кода.";
-      throw new ChunkError(message, 500);
-    }
-    partsWithChunks.push({ part, chunks: mergedChunks });
+    partsWithChunks.push(await chunkDocumentPart(part));
   }
 
   return { partsWithChunks };
