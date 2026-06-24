@@ -181,10 +181,10 @@ function getBackendUrl(): string {
   return LLM_BACKEND === "vllm" ? VLLM_URL : OLLAMA_URL;
 }
 
-async function getRawResponseFromLLM(
+export async function getRawResponseFromLLM(
   part: string,
   systemInstruction: string,
-  phase: "chunk" | "merge"
+  phase: "chunk" | "merge" | "analysis"
 ): Promise<string> {
   if (LLM_BACKEND === "vllm") {
     const url = VLLM_URL.trim();
