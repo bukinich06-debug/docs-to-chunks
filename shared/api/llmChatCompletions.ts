@@ -1,6 +1,7 @@
 import type { ImageLlmType } from "@/lib/outlineOutput";
 
 const DEFAULT_LLM_CHAT_BASE_URL = "http://mskpcai:3336";
+const MAX_IMAGE_LLM_ATTEMPTS = 3;
 
 const IMAGE_DESCRIPTION_USER_PROMPT =
   "Тебе отправлено изображение. Верни один JSON-объект (только валидный JSON, без markdown-ограждений и без текста до или после) с полями: " +
@@ -22,10 +23,9 @@ export type LlmImageMetadata = {
   type: ImageLlmType;
 };
 
-const EMPTY_LLM_METADATA: LlmImageMetadata = {
-  llmname: "",
-  description: "",
-  type: "pict",
+export type ImageLlmContext = {
+  sectionIndex: number;
+  imageIndex: number;
 };
 
 type ChatCompletionsResponse = {
@@ -67,7 +67,9 @@ function normalizeLlmImageType(raw: unknown): ImageLlmType {
 }
 
 function readMetadataFromParsed(parsed: unknown): LlmImageMetadata {
-  if (!parsed || typeof parsed !== "object") return { ...EMPTY_LLM_METADATA };
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Ответ LLM не является JSON-объектом.");
+  }
   const rec = parsed as Record<string, unknown>;
 
   return {
@@ -77,84 +79,106 @@ function readMetadataFromParsed(parsed: unknown): LlmImageMetadata {
   };
 }
 
-/**
- * Запрос к LLM: name, description, type из JSON в ответе ассистента.
- * При ошибке сети/парсинга — пустые строки и type "pict".
- */
-export async function fetchImageMetadataFromLlm(
+function isValidImageMetadata(meta: LlmImageMetadata): boolean {
+  return meta.llmname.length > 0 && meta.description.length > 0;
+}
+
+async function fetchImageMetadataFromLlmOnce(
   buffer: Buffer,
   contentType: string
 ): Promise<LlmImageMetadata> {
-  try {
-    const base = getLlmChatBaseUrl().replace(/\/$/, "");
-    const dataUrl = `data:${contentType};base64,${buffer.toString("base64")}`;
-    const res = await fetch(`${base}/v1/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "QuantTrio/Qwen3.6-27B-AWQ",
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: IMAGE_DESCRIPTION_USER_PROMPT,
+  const base = getLlmChatBaseUrl().replace(/\/$/, "");
+  const dataUrl = `data:${contentType};base64,${buffer.toString("base64")}`;
+  const res = await fetch(`${base}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "QuantTrio/Qwen3.6-27B-AWQ",
+      temperature: 0,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: IMAGE_DESCRIPTION_USER_PROMPT,
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: dataUrl,
               },
-              {
-                type: "image_url",
-                image_url: {
-                  url: dataUrl,
-                },
-              },
-            ],
-          },
-        ],
-        chat_template_kwargs: {
-          enable_thinking: false,
+            },
+          ],
         },
-      }),
-    });
+      ],
+      chat_template_kwargs: {
+        enable_thinking: false,
+      },
+    }),
+  });
 
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => "");
-      if (process.env.NODE_ENV === "development") {
-        console.warn(
-          "[fetchImageMetadataFromLlm] HTTP",
-          res.status,
-          errBody.slice(0, 500)
-        );
-      }
-      return { ...EMPTY_LLM_METADATA };
-    }
-
-    const data = (await res.json()) as ChatCompletionsResponse;
-    const content = data.choices?.[0]?.message?.content;
-    if (typeof content !== "string" || !content.trim()) {
-      if (process.env.NODE_ENV === "development") {
-        console.warn("[fetchImageMetadataFromLlm] empty assistant content");
-      }
-      return { ...EMPTY_LLM_METADATA };
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = parseAssistantJsonContent(content);
-    } catch {
-      if (process.env.NODE_ENV === "development") {
-        console.warn(
-          "[fetchImageMetadataFromLlm] JSON parse failed:",
-          content.slice(0, 400)
-        );
-      }
-      return { ...EMPTY_LLM_METADATA };
-    }
-
-    return readMetadataFromParsed(parsed);
-  } catch (e) {
-    if (process.env.NODE_ENV === "development") {
-      console.warn("[fetchImageMetadataFromLlm]", e);
-    }
-    return { ...EMPTY_LLM_METADATA };
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => "");
+    throw new Error(
+      `HTTP ${res.status}${errBody ? `: ${errBody.slice(0, 300)}` : ""}`
+    );
   }
+
+  const data = (await res.json()) as ChatCompletionsResponse;
+  const content = data.choices?.[0]?.message?.content;
+  if (typeof content !== "string" || !content.trim()) {
+    throw new Error("Пустой ответ ассистента.");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = parseAssistantJsonContent(content);
+  } catch {
+    throw new Error(
+      `Не удалось разобрать JSON в ответе: ${content.slice(0, 200)}`
+    );
+  }
+
+  const meta = readMetadataFromParsed(parsed);
+  if (!isValidImageMetadata(meta)) {
+    throw new Error("В ответе LLM пустые поля name или description.");
+  }
+
+  return meta;
+}
+
+/**
+ * Запрос к LLM: name, description, type из JSON в ответе ассистента.
+ * До трёх попыток; при неудаче — исключение (обработка останавливается).
+ */
+export async function fetchImageMetadataFromLlm(
+  buffer: Buffer,
+  contentType: string,
+  context?: ImageLlmContext
+): Promise<LlmImageMetadata> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= MAX_IMAGE_LLM_ATTEMPTS; attempt++) {
+    try {
+      return await fetchImageMetadataFromLlmOnce(buffer, contentType);
+    } catch (e) {
+      lastError = e;
+      if (attempt < MAX_IMAGE_LLM_ATTEMPTS) {
+        console.warn(
+          `[fetchImageMetadataFromLlm] попытка ${attempt}/${MAX_IMAGE_LLM_ATTEMPTS} неудачна:`,
+          e instanceof Error ? e.message : e
+        );
+      }
+    }
+  }
+
+  const ctx = context
+    ? ` (раздел ${context.sectionIndex}, изображение ${context.imageIndex})`
+    : "";
+  const detail =
+    lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(
+    `Не удалось получить имя и описание изображения от LLM после ${MAX_IMAGE_LLM_ATTEMPTS} попыток${ctx}: ${detail}`
+  );
 }

@@ -1,4 +1,4 @@
-import { buildDocxOutline } from "@/app/api/docx-outline/docxOutlineService";
+import { buildDocxOutline } from "./docxOutlineService";
 import { outlineJsonBaseName } from "@/lib/outlineOutput";
 import JSZip from "jszip";
 import { NextResponse } from "next/server";

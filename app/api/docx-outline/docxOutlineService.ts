@@ -10,6 +10,7 @@ import {
   type OutputItem,
   type ParentItem,
 } from "@/lib/outlineOutput";
+import { isSmallIconBySize, readImageDimensions } from "@/lib/imageDimensions";
 import { fetchImageMetadataFromLlm } from "@shared/api/llmChatCompletions";
 
 const HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6";
@@ -309,24 +310,33 @@ async function handleDataImage(
   let name = "";
   const cap = captionByImg.get(imgEl);
   if (cap) name = cap;
-  
-  const llm = await fetchImageMetadataFromLlm(parsed.buffer, parsed.contentType);
-  if (llm.type === 'icon') name = llm.llmname;
 
-  if (!name || name.trim() === '') name = llm.llmname;
-  if (llm.type === 'pict') mediaFiles.set(relPathImg, parsed.buffer);
-  if (llm.type === 'icon') mediaFiles.set(relPathIcon, parsed.buffer);
+  const dims = readImageDimensions(parsed.buffer);
+  const forceIcon =
+    dims != null && isSmallIconBySize(dims.width, dims.height);
 
-  const relPath = llm.type === 'pict' ? relPathImg : relPathIcon;
+  const llm = await fetchImageMetadataFromLlm(parsed.buffer, parsed.contentType, {
+    sectionIndex,
+    imageIndex: idx,
+  });
+  const type: ImageLlmType = forceIcon ? "icon" : llm.type;
+
+  if (type === "icon") name = llm.llmname;
+
+  if (!name || name.trim() === "") name = llm.llmname;
+  if (type === "pict") mediaFiles.set(relPathImg, parsed.buffer);
+  if (type === "icon") mediaFiles.set(relPathIcon, parsed.buffer);
+
+  const relPath = type === "pict" ? relPathImg : relPathIcon;
   images.push({
     name: name,
     img: relPath,
     llmname: llm.llmname,
     description: llm.description,
-    type: llm.type,
+    type,
   });
 
-  return wrapImageDescriptionInSectionText(llm.description, llm.type, relPath, llm.llmname);
+  return wrapImageDescriptionInSectionText(llm.description, type, relPath, llm.llmname);
 }
 
 async function fragmentToTextWithImages(
